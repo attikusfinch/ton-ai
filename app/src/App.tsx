@@ -112,11 +112,6 @@ function useTheme() {
   return { theme, setTheme };
 }
 
-function formatError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
-
 function parseAddressOrNull(value: string): Address | null {
   try {
     return value.trim() ? Address.parse(value.trim()) : null;
@@ -134,6 +129,44 @@ function bigintText(value: bigint | null | undefined) {
   return value === null || value === undefined ? '-' : value.toString();
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function stringifyUnknown(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'string') return value;
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function limitText(value: string, limit = 500): string {
+  return value.length > limit ? `${value.slice(0, limit)}...` : value;
+}
+
+function formatError(error: unknown): string {
+  if (isRecord(error) && isRecord(error.response)) {
+    const response = error.response;
+    const status = stringifyUnknown(response.status);
+    const statusText = stringifyUnknown(response.statusText);
+    const data = stringifyUnknown(response.data);
+    return [
+      status ? `HTTP ${status}` : null,
+      statusText,
+      data ? limitText(data) : null,
+    ]
+      .filter(Boolean)
+      .join(': ');
+  }
+
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
 function parseTonAmount(value: string): bigint | null {
   const normalized = value.trim().replace(',', '.');
   if (!/^\d+(\.\d{1,9})?$/.test(normalized)) return null;
@@ -147,6 +180,7 @@ function base64EmptyCell() {
 function StatusPill({ status }: { status: AppStatus }) {
   return (
     <div
+      title={status.text}
       className={cn(
         'inline-flex h-8 max-w-full items-center gap-2 rounded-md border px-3 text-[13px]',
         status.kind === 'error' && 'border-destructive/40 text-destructive',
