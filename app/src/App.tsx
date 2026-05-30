@@ -20,6 +20,7 @@ import {
   Copy,
   Database,
   ExternalLink,
+  KeyRound,
   LogOut,
   Moon,
   Pause,
@@ -46,6 +47,10 @@ import {
   networkLabel,
   tonviewerUrl,
 } from '@/lib/ton';
+import {
+  deriveDirectWalletAddress,
+  sendDirectWalletMessages,
+} from '@/lib/proSigner';
 import {
   adminValue,
   bodyFromContinue,
@@ -194,6 +199,10 @@ export default function App() {
   const [toncenterKey, setToncenterKey] = useState(
     () => localStorage.getItem(toncenterKeyStorageKey) ?? '',
   );
+  const [proMode, setProMode] = useState(false);
+  const [proSeed, setProSeed] = useState('');
+  const [proSignerAddress, setProSignerAddress] = useState('');
+  const [isCheckingProSigner, setIsCheckingProSigner] = useState(false);
   const [prompt, setPrompt] = useState('Hello, how are you?');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [status, setStatus] = useState<AppStatus>(emptyStatus);
@@ -226,6 +235,10 @@ export default function App() {
     setToncenterKey(localStorage.getItem(toncenterKeyStorageKey) ?? '');
   }, [toncenterKeyStorageKey]);
 
+  useEffect(() => {
+    setProSignerAddress('');
+  }, [network]);
+
   const saveToncenterKey = useCallback(
     (value: string) => {
       setToncenterKey(value);
@@ -236,21 +249,52 @@ export default function App() {
     [toncenterKeyStorageKey],
   );
 
+  const checkProSigner = useCallback(async () => {
+    setIsCheckingProSigner(true);
+    try {
+      const address = await deriveDirectWalletAddress(proSeed, network);
+      setProSignerAddress(address);
+      setStatus({ kind: 'success', text: 'Direct signer ready' });
+    } catch (error) {
+      setProSignerAddress('');
+      setStatus({ kind: 'error', text: formatError(error) });
+    } finally {
+      setIsCheckingProSigner(false);
+    }
+  }, [network, proSeed]);
+
+  const ensureProSignerAddress = useCallback(async () => {
+    if (!proMode) return proSignerAddress;
+    if (proSignerAddress) return proSignerAddress;
+
+    const address = await deriveDirectWalletAddress(proSeed, network);
+    setProSignerAddress(address);
+    return address;
+  }, [network, proMode, proSeed, proSignerAddress]);
+
+  const clearProSigner = useCallback(() => {
+    setProSeed('');
+    setProSignerAddress('');
+    setStatus({ kind: 'idle', text: 'Direct signer cleared' });
+  }, []);
+
   const walletChainMatches =
     !wallet ||
     (network === 'testnet'
       ? wallet.account.chain === CHAIN.TESTNET
       : wallet.account.chain === CHAIN.MAINNET);
 
-  const userWallet = walletAddress
-    ? (() => {
-        try {
-          return formatAddressForNetwork(walletAddress, network);
-        } catch {
-          return walletAddress;
-        }
-      })()
-    : '';
+  const userWallet = proMode
+    ? proSignerAddress
+    : walletAddress
+      ? (() => {
+          try {
+            return formatAddressForNetwork(walletAddress, network);
+          } catch {
+            return walletAddress;
+          }
+        })()
+      : '';
 
   const contractAddress = useMemo(
     () => parseAddressOrNull(contractInput),
@@ -264,10 +308,17 @@ export default function App() {
       })
     : contractInput.trim();
 
-  const ownerAddress = useMemo(
+  const connectedOwnerAddress = useMemo(
     () => parseAddressOrNull(walletRawAddress || walletAddress),
     [walletRawAddress, walletAddress],
   );
+
+  const proOwnerAddress = useMemo(
+    () => parseAddressOrNull(proSignerAddress),
+    [proSignerAddress],
+  );
+
+  const ownerAddress = proMode ? proOwnerAddress : connectedOwnerAddress;
 
   const derivedContract = useMemo(
     () => (ownerAddress ? createTonGptForOwner(ownerAddress) : null),
@@ -291,8 +342,10 @@ export default function App() {
     config && ownerAddress && config.owner.equals(ownerAddress),
   );
   const canUseContract = Boolean(contractAddress);
+  const hasProSeed = proSeed.trim().length > 0;
   const canSend = Boolean(
-    walletAddress && walletChainMatches && canUseContract,
+    canUseContract &&
+    (proMode ? hasProSeed : walletAddress && walletChainMatches),
   );
   const canWithdraw = Boolean(canSend && isOwner && withdrawAmount.trim());
   const generationValueTon =
@@ -347,6 +400,17 @@ export default function App() {
 
   const sendMessages = useCallback(
     async (messages: TonConnectMessage[]) => {
+      if (proMode) {
+        const result = await sendDirectWalletMessages(
+          client,
+          network,
+          proSeed,
+          messages,
+        );
+        setProSignerAddress(result.address);
+        return result;
+      }
+
       if (!walletAddress) throw new Error('Connect wallet');
       if (!walletChainMatches) {
         throw new Error(`Switch wallet to ${networkLabel(network)}`);
@@ -358,7 +422,15 @@ export default function App() {
         messages,
       });
     },
-    [network, tonConnectUI, walletAddress, walletChainMatches],
+    [
+      client,
+      network,
+      proMode,
+      proSeed,
+      tonConnectUI,
+      walletAddress,
+      walletChainMatches,
+    ],
   );
 
   const sendSingleMessage = useCallback(
@@ -388,8 +460,11 @@ export default function App() {
   );
 
   const findLatestReply = useCallback(
-    async (sinceUnix: number): Promise<ReplyMatch | null> => {
-      if (!contractAddress || !ownerAddress) return null;
+    async (
+      sinceUnix: number,
+      replyOwnerAddress = ownerAddress,
+    ): Promise<ReplyMatch | null> => {
+      if (!contractAddress || !replyOwnerAddress) return null;
 
       const contractTransactions = await client.getTransactions(
         contractAddress,
@@ -404,7 +479,7 @@ export default function App() {
         for (const message of tx.outMessages.values()) {
           if (message.info.type !== 'internal') continue;
           if (!message.info.src.equals(contractAddress)) continue;
-          if (!message.info.dest.equals(ownerAddress)) continue;
+          if (!message.info.dest.equals(replyOwnerAddress)) continue;
 
           const text = parseTextComment(message.body);
           if (text === null) continue;
@@ -416,10 +491,13 @@ export default function App() {
         }
       }
 
-      const walletTransactions = await client.getTransactions(ownerAddress, {
-        limit: 20,
-        archival: false,
-      });
+      const walletTransactions = await client.getTransactions(
+        replyOwnerAddress,
+        {
+          limit: 20,
+          archival: false,
+        },
+      );
 
       for (const tx of walletTransactions) {
         if (tx.now < sinceUnix - 30) continue;
@@ -441,41 +519,60 @@ export default function App() {
     [client, contractAddress, ownerAddress],
   );
 
-  const pollReply = useCallback(async () => {
-    const sinceUnix = Math.floor(Date.now() / 1000);
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, attempt === 0 ? 1800 : 4000),
-      );
-      try {
-        const reply = await findLatestReply(sinceUnix);
-        if (reply) return reply;
-      } catch {
-        // Indexers can lag or a wallet can be fresh. Keep polling.
+  const pollReply = useCallback(
+    async (replyOwnerAddress?: Address) => {
+      const sinceUnix = Math.floor(Date.now() / 1000);
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, attempt === 0 ? 1800 : 4000),
+        );
+        try {
+          const reply = await findLatestReply(sinceUnix, replyOwnerAddress);
+          if (reply) return reply;
+        } catch {
+          // Indexers can lag or a wallet can be fresh. Keep polling.
+        }
       }
-    }
-    return null;
-  }, [findLatestReply]);
+      return null;
+    },
+    [findLatestReply],
+  );
 
   const deployContract = async () => {
-    if (!derivedContract) {
-      setStatus({ kind: 'error', text: 'Connect wallet first' });
+    let contractToDeploy = derivedContract;
+
+    if (!contractToDeploy && proMode && hasProSeed) {
+      setStatus({ kind: 'pending', text: 'Preparing direct signer' });
+      try {
+        const signerAddress = await ensureProSignerAddress();
+        contractToDeploy = createTonGptForOwner(Address.parse(signerAddress));
+      } catch (error) {
+        setStatus({ kind: 'error', text: formatError(error) });
+        return;
+      }
+    }
+
+    if (!contractToDeploy) {
+      setStatus({
+        kind: 'error',
+        text: proMode ? 'Enter seed phrase' : 'Connect wallet first',
+      });
       return;
     }
 
     setStatus({ kind: 'pending', text: 'Deploy transaction' });
     try {
       await sendSingleMessage({
-        address: derivedContract.address.toString({
+        address: contractToDeploy.address.toString({
           bounceable: false,
           testOnly: network === 'testnet',
         }),
         amount: deployValue,
-        stateInit: stateInitToBase64(derivedContract),
+        stateInit: stateInitToBase64(contractToDeploy),
         payload: base64EmptyCell(),
       });
       saveContractInput(
-        derivedContract.address.toString({
+        contractToDeploy.address.toString({
           bounceable: false,
           testOnly: network === 'testnet',
         }),
@@ -490,6 +587,17 @@ export default function App() {
   const sendPrompt = async (event?: FormEvent) => {
     event?.preventDefault();
     if (!contractAddress || !openedContract || !prompt.trim()) return;
+
+    let replyOwnerAddress = ownerAddress;
+    if (!replyOwnerAddress && proMode && hasProSeed) {
+      try {
+        const signerAddress = await ensureProSignerAddress();
+        replyOwnerAddress = Address.parse(signerAddress);
+      } catch (error) {
+        setStatus({ kind: 'error', text: formatError(error) });
+        return;
+      }
+    }
 
     const text = prompt.trim();
     const contractTarget = contractAddress.toString({
@@ -529,7 +637,7 @@ export default function App() {
       });
       await sendMessages(messages);
       setStatus({ kind: 'pending', text: 'Waiting for reply' });
-      const reply = await pollReply();
+      const reply = await pollReply(replyOwnerAddress ?? undefined);
 
       setChat((items) =>
         items.map((item) =>
@@ -592,7 +700,10 @@ export default function App() {
 
   const withdrawTon = async () => {
     if (!ownerAddress) {
-      setStatus({ kind: 'error', text: 'Connect owner wallet' });
+      setStatus({
+        kind: 'error',
+        text: proMode ? 'Check direct signer first' : 'Connect owner wallet',
+      });
       return;
     }
     const amount = parseTonAmount(withdrawAmount);
@@ -720,7 +831,11 @@ export default function App() {
                 <Button
                   type="button"
                   onClick={() => void deployContract()}
-                  disabled={!derivedContract || !walletChainMatches}
+                  disabled={
+                    proMode
+                      ? !hasProSeed
+                      : !derivedContract || !walletChainMatches
+                  }
                   title="Deploy TONGPT"
                 >
                   <Rocket />
@@ -732,7 +847,11 @@ export default function App() {
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Wallet</span>
                   <span className="min-w-0 truncate font-mono">
-                    {userWallet ? shortAddress(userWallet) : 'Disconnected'}
+                    {userWallet
+                      ? shortAddress(userWallet)
+                      : proMode
+                        ? 'Seed not checked'
+                        : 'Disconnected'}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
@@ -754,6 +873,72 @@ export default function App() {
                       : `${Number(contractBalance) / 1_000_000_000} TON`}
                   </span>
                 </div>
+              </div>
+
+              <div className="grid gap-3 rounded-md border bg-background p-3 text-[13px]">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 font-semibold">
+                    <KeyRound className="size-4 text-primary" />
+                    Pro signer
+                  </div>
+                  <label className="flex items-center gap-2 text-[12px] text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={proMode}
+                      onChange={(event) => setProMode(event.target.checked)}
+                    />
+                    Direct
+                  </label>
+                </div>
+
+                {proMode && (
+                  <>
+                    <textarea
+                      className={cn(textareaClass, 'min-h-[72px] font-mono')}
+                      value={proSeed}
+                      onChange={(event) => {
+                        setProSeed(event.target.value);
+                        setProSignerAddress('');
+                      }}
+                      placeholder="24 seed words"
+                      autoComplete="off"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                    />
+                    <div className="flex items-center justify-between gap-2 text-[12px] text-muted-foreground">
+                      <span>Memory only, never saved</span>
+                      <span className="min-w-0 truncate font-mono">
+                        {proSignerAddress
+                          ? shortAddress(proSignerAddress)
+                          : 'No signer'}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => void checkProSigner()}
+                        disabled={!hasProSeed || isCheckingProSigner}
+                      >
+                        {isCheckingProSigner ? (
+                          <span className="spinner" />
+                        ) : (
+                          <KeyRound />
+                        )}
+                        Check
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={clearProSigner}
+                        disabled={!proSeed && !proSignerAddress}
+                      >
+                        Clear
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
 
               <Field label="Toncenter API key">
@@ -932,9 +1117,13 @@ export default function App() {
                         tongptMetadata.continuationWindows +
                       1
                     } messages`
-                  : walletAddress
+                  : !canUseContract
                     ? 'Contract required'
-                    : 'Wallet required'}
+                    : proMode
+                      ? 'Seed required'
+                      : walletAddress
+                        ? 'Wallet network required'
+                        : 'Wallet required'}
               </div>
               <Button disabled={!canSend || isSending || !prompt.trim()}>
                 {isSending ? <span className="spinner" /> : <Send />}
@@ -994,7 +1183,7 @@ export default function App() {
             </div>
           </div>
 
-          {!walletChainMatches && (
+          {!proMode && !walletChainMatches && (
             <div className="rounded-lg border border-warning/40 bg-card p-4 text-[13px] text-warning">
               Wallet network mismatch
             </div>
