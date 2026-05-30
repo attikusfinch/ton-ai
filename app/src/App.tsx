@@ -58,7 +58,6 @@ import {
   parseTextComment,
   replyValue,
   stateInitToBase64,
-  textCommentCell,
   tongptMetadata,
 } from '@/lib/tongpt';
 import { TonGpt, type TonGptConfig } from '@wrappers/TonGpt.gen';
@@ -196,8 +195,6 @@ export default function App() {
     () => localStorage.getItem(toncenterKeyStorageKey) ?? '',
   );
   const [prompt, setPrompt] = useState('Hello, how are you?');
-  const [previewPrompt, setPreviewPrompt] = useState('Do you use cache?');
-  const [previewResult, setPreviewResult] = useState('-');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [status, setStatus] = useState<AppStatus>(emptyStatus);
   const [config, setConfig] = useState<TonGptConfig | null>(null);
@@ -607,19 +604,6 @@ export default function App() {
     setWithdrawAmount('');
   };
 
-  const runPreview = async () => {
-    if (!openedContract || !previewPrompt.trim()) return;
-    setPreviewResult('Loading...');
-    try {
-      const cell = await openedContract.getGenerate(
-        textCommentCell(previewPrompt.trim()),
-      );
-      setPreviewResult(parseTextComment(cell) ?? '(non-text reply)');
-    } catch (error) {
-      setPreviewResult(formatError(error));
-    }
-  };
-
   const copyContract = async () => {
     if (!contractForDisplay) return;
     await navigator.clipboard.writeText(contractForDisplay);
@@ -990,34 +974,6 @@ export default function App() {
                       testOnly: network === 'testnet',
                     })
                   : '-'}
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-lg border bg-card p-4">
-            <div className="mb-4 flex items-center gap-2 font-semibold">
-              <Bot className="size-4 text-primary" />
-              Preview
-            </div>
-            <div className="grid gap-3">
-              <Field label="Get-method prompt">
-                <textarea
-                  className={cn(textareaClass, 'min-h-[68px]')}
-                  value={previewPrompt}
-                  onChange={(event) => setPreviewPrompt(event.target.value)}
-                />
-              </Field>
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={!openedContract || !previewPrompt.trim()}
-                onClick={() => void runPreview()}
-              >
-                <RefreshCw />
-                Generate
-              </Button>
-              <div className="min-h-16 rounded-md border bg-background p-3 text-[13px] text-muted-foreground">
-                {previewResult}
               </div>
             </div>
           </div>
