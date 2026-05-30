@@ -59,6 +59,22 @@ export const defaultPrompts = [
   'What is pizza?',
 ];
 
+const modelEntryCounts = {
+  byteEmbeddings: Object.keys(tongptModel.byte_embeddings).length,
+  positionEmbeddings: Object.keys(tongptModel.position_embeddings).length,
+  pairEmbeddings: Object.keys(tongptModel.pair_embeddings).length,
+  tokenEmbeddings: Object.keys(tongptModel.token_embeddings).filter(
+    (key) => key !== '0',
+  ).length,
+  heads: Object.keys(tongptModel.heads).length,
+  tokenBytes: Math.max(0, tongptModel.pieces.length - 1),
+};
+
+const modelEntryTotal = Object.values(modelEntryCounts).reduce(
+  (sum, count) => sum + count,
+  0,
+);
+
 const uploadChunkCount =
   Math.ceil(
     Object.keys(tongptModel.byte_embeddings).length / vectorUploadChunkSize,
@@ -89,6 +105,10 @@ export const tongptMetadata = {
   uploadTransactions: Math.ceil(
     uploadChunkCount / uploadMessagesPerTransaction,
   ),
+  modelEntries: {
+    ...modelEntryCounts,
+    total: modelEntryTotal,
+  },
 };
 
 export type TonGptUploadChunk = {

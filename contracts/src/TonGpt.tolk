@@ -167,14 +167,23 @@ fun generatedTonGptCommentFromHidden(hiddenStart: TonGptHidden, storage: TonGptS
     return result.endCell();
 }
 
+fun sendTonGptRefund(user: address) {
+    val outMsg = createMessage({
+        bounce: BounceMode.NoBounce,
+        value: 0,
+        dest: user,
+    });
+    outMsg.send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE + SEND_MODE_IGNORE_ERRORS);
+}
+
 fun sendFinalTonGptReply(user: address, replyBody: cell) {
     val outMsg = createMessage({
         bounce: BounceMode.NoBounce,
-        value: ton("0.01"),
+        value: 0,
         dest: user,
         body: replyBody,
     });
-    outMsg.send(SEND_MODE_REGULAR);
+    outMsg.send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE + SEND_MODE_IGNORE_ERRORS);
 }
 
 fun startTonGptJob(senderAddress: address, body: slice) {
@@ -200,14 +209,16 @@ fun startTonGptJob(senderAddress: address, body: slice) {
             },
         );
     storage.save();
+    sendTonGptRefund(senderAddress);
 }
 
-fun continueTonGptJob(msg: ContinueTonGpt) {
+fun continueTonGptJob(senderAddress: address, msg: ContinueTonGpt) {
     var storage = lazy TonGptStorage.load();
     assert (!storage.isPaused) throw TonGptErrors.Paused;
 
     val lookup = storage.jobs.get(msg.jobId);
     if (!lookup.isFound) {
+        sendTonGptRefund(senderAddress);
         return;
     }
 
@@ -240,6 +251,7 @@ fun continueTonGptJob(msg: ContinueTonGpt) {
         job.hasBest = best.hasBest;
         storage.jobs.set(msg.jobId, job);
         storage.save();
+        sendTonGptRefund(job.user);
         return;
     }
 
@@ -339,7 +351,7 @@ fun onInternalMessage(in: InMessage) {
             outMsg.send(SEND_MODE_REGULAR);
         }
         ContinueTonGpt => {
-            continueTonGptJob(msg);
+            continueTonGptJob(in.senderAddress, msg);
         }
         UploadTonGptPromptChunk => {
             uploadTonGptPromptChunk(in.senderAddress, msg);
@@ -372,4 +384,33 @@ get fun generate(body: cell): cell {
     val storage = lazy TonGptStorage.load();
     val hidden = encodeTonGptPrompt(body.beginParse(), storage);
     return generatedTonGptCommentFromHidden(hidden, storage);
+}
+
+get fun modelStatus(): TonGptModelStatus {
+    val storage = lazy TonGptStorage.load();
+    val model = storage.modelData();
+    val promptWeights = model.promptData();
+    val outputWeights = model.outputData();
+    val byteEmbeddings = countTonGptVectorMap8(promptWeights.byteEmbeddings);
+    val positionEmbeddings = countTonGptVectorMap8(promptWeights.positionEmbeddings);
+    val pairEmbeddings = countTonGptVectorMap16(promptWeights.pairEmbeddings);
+    val tokenEmbeddings = countTonGptVectorMap16(outputWeights.tokenEmbeddings);
+    val heads = countTonGptHeadMap16(outputWeights.heads);
+    val tokenBytes = countTonGptCellMap16(outputWeights.tokenBytes);
+    val nonEosTokenCount = (storage.candidateCount - 1) as uint16;
+
+    return TonGptModelStatus {
+        byteEmbeddings,
+        positionEmbeddings,
+        pairEmbeddings,
+        tokenEmbeddings,
+        heads,
+        tokenBytes,
+        isReady: byteEmbeddings >= tongptExpectedByteEmbeddingCount() &&
+        positionEmbeddings >= storage.maxContext &&
+        pairEmbeddings >= tongptExpectedPairEmbeddingCount() &&
+        tokenEmbeddings >= nonEosTokenCount &&
+        heads >= storage.candidateCount &&
+        tokenBytes >= nonEosTokenCount,
+    };
 }

@@ -18,6 +18,11 @@ get fun `test tongpt deploy exposes trained model config`() {
     expect(config.eosToken).toEqual(0);
     expect(config.candidateCount).toEqual(244);
     expect(config.isPaused).toBeFalse();
+
+    val status = model.modelStatus();
+    expect(status.isReady).toBeTrue();
+    expect(status.heads).toEqual(244);
+    expect(status.tokenBytes).toEqual(243);
 }
 
 get fun `test tongpt empty deploy accepts output weight chunks`() {
@@ -29,6 +34,7 @@ get fun `test tongpt empty deploy accepts output weight chunks`() {
     });
 
     expect(model.generate(tonGptTextComment("x")).hash()).toEqual(tonGptTextComment("?").hash());
+    expect(model.modelStatus().isReady).toBeFalse();
 
     var heads: map<uint16, TonGptHead> = [];
     heads.set(0, testTonGptHead(0));
@@ -48,6 +54,10 @@ get fun `test tongpt empty deploy accepts output weight chunks`() {
         from: deployer.address,
         to: model.address,
     });
+    val status = model.modelStatus();
+    expect(status.isReady).toBeFalse();
+    expect(status.heads).toEqual(2);
+    expect(status.tokenBytes).toEqual(1);
     expect(model.generate(tonGptTextComment("x")).hash()).toEqual(tonGptTextComment("ok").hash());
 }
 
@@ -83,6 +93,13 @@ get fun `test tongpt chunked logits stay under transaction gas`() {
     expect(firstChunk).toHaveSuccessfulTx({
         from: user.address,
         to: model.address,
+    });
+    expect(firstChunk).toHaveSuccessfulTx({
+        from: model.address,
+        to: user.address,
+        value: fun(value: coins): bool {
+            return value > ton("0.01");
+        },
     });
 
     val secondChunk = model.sendContinueTonGpt(user.address, 1, { value: ton("0.08") });

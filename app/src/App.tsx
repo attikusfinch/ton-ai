@@ -70,7 +70,11 @@ import {
   uploadMessagesPerTransaction,
   uploadValue,
 } from '@/lib/tongpt';
-import { TonGpt, type TonGptConfig } from '@wrappers/TonGpt.gen';
+import {
+  TonGpt,
+  type TonGptConfig,
+  type TonGptModelStatus,
+} from '@wrappers/TonGpt.gen';
 
 type StatusKind = 'idle' | 'pending' | 'success' | 'error';
 
@@ -132,6 +136,10 @@ function shortAddress(address: string) {
 
 function bigintText(value: bigint | null | undefined) {
   return value === null || value === undefined ? '-' : value.toString();
+}
+
+function countText(value: bigint | null | undefined, total: number) {
+  return `${bigintText(value)}/${total}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -246,6 +254,9 @@ export default function App() {
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [status, setStatus] = useState<AppStatus>(emptyStatus);
   const [config, setConfig] = useState<TonGptConfig | null>(null);
+  const [modelStatus, setModelStatus] = useState<TonGptModelStatus | null>(
+    null,
+  );
   const [contractBalance, setContractBalance] = useState<bigint | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -272,6 +283,7 @@ export default function App() {
     const saved = localStorage.getItem(storageKey) ?? '';
     setContractInput(saved);
     setConfig(null);
+    setModelStatus(null);
     setContractBalance(null);
   }, [storageKey]);
 
@@ -387,11 +399,14 @@ export default function App() {
   );
   const canUseContract = Boolean(contractAddress);
   const hasProSeed = proSeed.trim().length > 0;
-  const canSend = Boolean(
+  const canUseWallet = Boolean(
     canUseContract &&
     (proMode ? hasProSeed : walletAddress && walletChainMatches),
   );
-  const canWithdraw = Boolean(canSend && isOwner && withdrawAmount.trim());
+  const isModelReady = Boolean(modelStatus?.isReady);
+  const modelStatusKnown = modelStatus !== null;
+  const canSend = Boolean(canUseWallet && (!modelStatusKnown || isModelReady));
+  const canWithdraw = Boolean(canUseWallet && isOwner && withdrawAmount.trim());
   const canUploadModel = Boolean(
     contractAddress &&
     proMode &&
@@ -407,10 +422,28 @@ export default function App() {
       tongptMetadata.continuationWindows;
   const uploadValueTon =
     (Number(uploadValue) / 1_000_000_000) * tongptMetadata.uploadChunks;
+  const loadedModelEntries = modelStatus
+    ? Number(modelStatus.byteEmbeddings) +
+      Number(modelStatus.positionEmbeddings) +
+      Number(modelStatus.pairEmbeddings) +
+      Number(modelStatus.tokenEmbeddings) +
+      Number(modelStatus.heads) +
+      Number(modelStatus.tokenBytes)
+    : 0;
+  const loadedModelPercent =
+    tongptMetadata.modelEntries.total > 0
+      ? Math.min(
+          100,
+          Math.round(
+            (loadedModelEntries / tongptMetadata.modelEntries.total) * 100,
+          ),
+        )
+      : 0;
 
   const saveContractInput = useCallback(
     (value: string) => {
       setContractInput(value);
+      setModelStatus(null);
       if (value.trim()) localStorage.setItem(storageKey, value.trim());
       else localStorage.removeItem(storageKey);
     },
@@ -420,21 +453,25 @@ export default function App() {
   const refreshConfig = useCallback(async () => {
     if (!openedContract || !contractAddress) {
       setConfig(null);
+      setModelStatus(null);
       setContractBalance(null);
       return;
     }
 
     setIsRefreshing(true);
     try {
-      const [nextConfig, balance] = await Promise.all([
+      const [nextConfig, balance, nextModelStatus] = await Promise.all([
         openedContract.getConfig(),
         client.getBalance(contractAddress),
+        openedContract.getModelStatus().catch(() => null),
       ]);
       setConfig(nextConfig);
+      setModelStatus(nextModelStatus);
       setContractBalance(balance);
       setStatus({ kind: 'success', text: 'Config refreshed' });
     } catch (error) {
       setConfig(null);
+      setModelStatus(null);
       setStatus({ kind: 'error', text: formatError(error) });
     } finally {
       setIsRefreshing(false);
@@ -641,6 +678,22 @@ export default function App() {
   const sendPrompt = async (event?: FormEvent) => {
     event?.preventDefault();
     if (!contractAddress || !openedContract || !prompt.trim()) return;
+    if (modelStatusKnown && !isModelReady) {
+      setStatus({ kind: 'error', text: 'Upload weights first' });
+      return;
+    }
+    if (!modelStatusKnown) {
+      const nextModelStatus = await openedContract
+        .getModelStatus()
+        .catch(() => null);
+      if (nextModelStatus) {
+        setModelStatus(nextModelStatus);
+        if (!nextModelStatus.isReady) {
+          setStatus({ kind: 'error', text: 'Upload weights first' });
+          return;
+        }
+      }
+    }
 
     let replyOwnerAddress = ownerAddress;
     if (!replyOwnerAddress && proMode && hasProSeed) {
@@ -1115,6 +1168,49 @@ export default function App() {
               <Sparkles className="size-4 text-primary" />
               Model
             </div>
+            <div
+              className={cn(
+                'mb-3 rounded-md border bg-background p-3 text-[13px]',
+                modelStatusKnown &&
+                  (isModelReady ? 'border-success/40' : 'border-warning/40'),
+              )}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Weights</span>
+                <span
+                  className={cn(
+                    'font-semibold',
+                    modelStatusKnown
+                      ? isModelReady
+                        ? 'text-success'
+                        : 'text-warning'
+                      : 'text-muted-foreground',
+                  )}
+                >
+                  {modelStatusKnown
+                    ? isModelReady
+                      ? 'Ready'
+                      : 'Missing'
+                    : 'Unknown'}
+                </span>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary">
+                <div
+                  className={cn(
+                    'h-full rounded-full',
+                    isModelReady ? 'bg-success' : 'bg-warning',
+                  )}
+                  style={{
+                    width: modelStatusKnown ? `${loadedModelPercent}%` : '0%',
+                  }}
+                />
+              </div>
+              <div className="mt-2 font-mono text-[12px] text-muted-foreground">
+                {modelStatusKnown
+                  ? `${loadedModelEntries}/${tongptMetadata.modelEntries.total} entries`
+                  : 'Status method unavailable until redeploy'}
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-2 text-[13px]">
               {[
                 ['Hidden', tongptMetadata.hidden],
@@ -1129,6 +1225,62 @@ export default function App() {
                 >
                   <div className="text-muted-foreground">{label}</div>
                   <div className="mt-1 font-mono text-[15px]">{value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2 text-[12px]">
+              {[
+                [
+                  'Byte',
+                  countText(
+                    modelStatus?.byteEmbeddings,
+                    tongptMetadata.modelEntries.byteEmbeddings,
+                  ),
+                ],
+                [
+                  'Position',
+                  countText(
+                    modelStatus?.positionEmbeddings,
+                    tongptMetadata.modelEntries.positionEmbeddings,
+                  ),
+                ],
+                [
+                  'Pair',
+                  countText(
+                    modelStatus?.pairEmbeddings,
+                    tongptMetadata.modelEntries.pairEmbeddings,
+                  ),
+                ],
+                [
+                  'Token',
+                  countText(
+                    modelStatus?.tokenEmbeddings,
+                    tongptMetadata.modelEntries.tokenEmbeddings,
+                  ),
+                ],
+                [
+                  'Heads',
+                  countText(
+                    modelStatus?.heads,
+                    tongptMetadata.modelEntries.heads,
+                  ),
+                ],
+                [
+                  'Pieces',
+                  countText(
+                    modelStatus?.tokenBytes,
+                    tongptMetadata.modelEntries.tokenBytes,
+                  ),
+                ],
+              ].map(([label, value]) => (
+                <div
+                  key={label}
+                  className="flex min-w-0 justify-between gap-2 rounded-md border bg-background px-2.5 py-2"
+                >
+                  <span className="truncate text-muted-foreground">
+                    {label}
+                  </span>
+                  <span className="font-mono">{value}</span>
                 </div>
               ))}
             </div>
@@ -1154,7 +1306,7 @@ export default function App() {
               type="button"
               variant="secondary"
               className="mt-3 w-full"
-              disabled={!canSend || isUploadingModel}
+              disabled={!canUseWallet || isUploadingModel}
               onClick={() => void togglePaused()}
             >
               {config?.isPaused ? <Play /> : <Pause />}
@@ -1261,11 +1413,15 @@ export default function App() {
                     } messages`
                   : !canUseContract
                     ? 'Contract required'
-                    : proMode
+                    : proMode && !hasProSeed
                       ? 'Seed required'
-                      : walletAddress
-                        ? 'Wallet network required'
-                        : 'Wallet required'}
+                      : !proMode && !walletAddress
+                        ? 'Wallet required'
+                        : !proMode && !walletChainMatches
+                          ? 'Wallet network required'
+                          : modelStatusKnown && !isModelReady
+                            ? 'Upload weights first'
+                            : 'Model status unavailable'}
               </div>
               <Button
                 disabled={

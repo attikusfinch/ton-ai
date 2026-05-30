@@ -121,6 +121,16 @@ struct TonGptConfig {
     isPaused: bool
 }
 
+struct TonGptModelStatus {
+    byteEmbeddings: uint16
+    positionEmbeddings: uint16
+    pairEmbeddings: uint16
+    tokenEmbeddings: uint16
+    heads: uint16
+    tokenBytes: uint16
+    isReady: bool
+}
+
 type TonGptMessage =
     | SetTonGptPaused
     | WithdrawTonGpt
@@ -255,6 +265,54 @@ fun mergeTonGptCellMap16(mutate target: map<uint16, cell>, chunk: map<uint16, ce
         target.set(entry.getKey(), entry.loadValue());
         entry = chunk.iterateNext(entry);
     }
+}
+
+fun countTonGptVectorMap8(items: map<uint8, TonGptVector>): uint16 {
+    var count: uint16 = 0;
+    var entry = items.findFirst();
+    while (entry.isFound) {
+        count += 1;
+        entry = items.iterateNext(entry);
+    }
+    return count;
+}
+
+fun countTonGptVectorMap16(items: map<uint16, TonGptVector>): uint16 {
+    var count: uint16 = 0;
+    var entry = items.findFirst();
+    while (entry.isFound) {
+        count += 1;
+        entry = items.iterateNext(entry);
+    }
+    return count;
+}
+
+fun countTonGptHeadMap16(items: map<uint16, TonGptHead>): uint16 {
+    var count: uint16 = 0;
+    var entry = items.findFirst();
+    while (entry.isFound) {
+        count += 1;
+        entry = items.iterateNext(entry);
+    }
+    return count;
+}
+
+fun countTonGptCellMap16(items: map<uint16, cell>): uint16 {
+    var count: uint16 = 0;
+    var entry = items.findFirst();
+    while (entry.isFound) {
+        count += 1;
+        entry = items.iterateNext(entry);
+    }
+    return count;
+}
+
+fun tongptExpectedByteEmbeddingCount(): uint16 {
+    return 128;
+}
+
+fun tongptExpectedPairEmbeddingCount(): uint16 {
+    return 416;
 }
 
 fun tonGptTextComment(text: string): cell {

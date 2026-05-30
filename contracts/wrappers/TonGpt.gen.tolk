@@ -140,3 +140,7 @@ fun TonGpt.config(self): TonGptConfig {
 fun TonGpt.generate(self, body: cell): cell {
     return net.runGetMethod(self.address, "generate", [body]);
 }
+
+fun TonGpt.modelStatus(self): TonGptModelStatus {
+    return net.runGetMethod(self.address, "modelStatus");
+}
