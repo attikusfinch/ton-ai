@@ -1,5 +1,5 @@
 // AUTO-GENERATED, do not edit
-// It's a TypeScript wrapper for a Empty contract in Tolk.
+// It's a TypeScript wrapper for a CraftGptMonoProbe contract in Tolk.
 /* eslint-disable */
 
 import * as c from '@ton/core';
@@ -115,95 +115,147 @@ class StackReader {
 
 type coins = bigint
 
-/**
- > type AllowedMessage = ChangeOwner
- */
-export type AllowedMessage = ChangeOwner
+type int32 = bigint
 
-export const AllowedMessage = {
-    fromSlice(s: c.Slice): AllowedMessage {
-        return ChangeOwner.fromSlice(s);
-    },
-    store(self: AllowedMessage, b: c.Builder): void {
-        ChangeOwner.store(self, b);
-    },
-    toCell(self: AllowedMessage): c.Cell {
-        return makeCellFrom<AllowedMessage>(self, AllowedMessage.store);
-    }
-}
+type uint32 = bigint
 
 /**
- > struct Storage {
+ > struct CraftProbeStorage {
  >     owner: address
+ >     lastScore: int32
  > }
  */
-export interface Storage {
-    readonly $: 'Storage'
+export interface CraftProbeStorage {
+    readonly $: 'CraftProbeStorage'
     owner: c.Address
+    lastScore: int32
 }
 
-export const Storage = {
+export const CraftProbeStorage = {
     create(args: {
         owner: c.Address
-    }): Storage {
+        lastScore: int32
+    }): CraftProbeStorage {
         return {
-            $: 'Storage',
+            $: 'CraftProbeStorage',
             ...args
         }
     },
-    fromSlice(s: c.Slice): Storage {
+    fromSlice(s: c.Slice): CraftProbeStorage {
         return {
-            $: 'Storage',
+            $: 'CraftProbeStorage',
             owner: s.loadAddress(),
+            lastScore: s.loadIntBig(32),
         }
     },
-    store(self: Storage, b: c.Builder): void {
+    store(self: CraftProbeStorage, b: c.Builder): void {
         b.storeAddress(self.owner);
+        b.storeInt(self.lastScore, 32);
     },
-    toCell(self: Storage): c.Cell {
-        return makeCellFrom<Storage>(self, Storage.store);
+    toCell(self: CraftProbeStorage): c.Cell {
+        return makeCellFrom<CraftProbeStorage>(self, CraftProbeStorage.store);
     }
 }
 
 /**
- > struct (0x2ce05111) ChangeOwner {
- >     newOwner: address
+ > struct CraftProbeConfig {
+ >     owner: address
+ >     lastScore: int32
+ >     fullTokenWeightedContribs: uint32
  > }
  */
-export interface ChangeOwner {
-    readonly $: 'ChangeOwner'
-    newOwner: c.Address
+export interface CraftProbeConfig {
+    readonly $: 'CraftProbeConfig'
+    owner: c.Address
+    lastScore: int32
+    fullTokenWeightedContribs: uint32
 }
 
-export const ChangeOwner = {
-    PREFIX: 0x2ce05111,
-
+export const CraftProbeConfig = {
     create(args: {
-        newOwner: c.Address
-    }): ChangeOwner {
+        owner: c.Address
+        lastScore: int32
+        fullTokenWeightedContribs: uint32
+    }): CraftProbeConfig {
         return {
-            $: 'ChangeOwner',
+            $: 'CraftProbeConfig',
             ...args
         }
     },
-    fromSlice(s: c.Slice): ChangeOwner {
-        loadAndCheckPrefix32(s, 0x2ce05111, 'ChangeOwner');
+    fromSlice(s: c.Slice): CraftProbeConfig {
         return {
-            $: 'ChangeOwner',
-            newOwner: s.loadAddress(),
+            $: 'CraftProbeConfig',
+            owner: s.loadAddress(),
+            lastScore: s.loadIntBig(32),
+            fullTokenWeightedContribs: s.loadUintBig(32),
         }
     },
-    store(self: ChangeOwner, b: c.Builder): void {
-        b.storeUint(0x2ce05111, 32);
-        b.storeAddress(self.newOwner);
+    store(self: CraftProbeConfig, b: c.Builder): void {
+        b.storeAddress(self.owner);
+        b.storeInt(self.lastScore, 32);
+        b.storeUint(self.fullTokenWeightedContribs, 32);
     },
-    toCell(self: ChangeOwner): c.Cell {
-        return makeCellFrom<ChangeOwner>(self, ChangeOwner.store);
+    toCell(self: CraftProbeConfig): c.Cell {
+        return makeCellFrom<CraftProbeConfig>(self, CraftProbeConfig.store);
+    }
+}
+
+/**
+ > type CraftProbeMessage = RunCraftProbe
+ */
+export type CraftProbeMessage = RunCraftProbe
+
+export const CraftProbeMessage = {
+    fromSlice(s: c.Slice): CraftProbeMessage {
+        return RunCraftProbe.fromSlice(s);
+    },
+    store(self: CraftProbeMessage, b: c.Builder): void {
+        RunCraftProbe.store(self, b);
+    },
+    toCell(self: CraftProbeMessage): c.Cell {
+        return makeCellFrom<CraftProbeMessage>(self, CraftProbeMessage.store);
+    }
+}
+
+/**
+ > struct (0x43505242) RunCraftProbe {
+ >     weightedContribs: uint32
+ > }
+ */
+export interface RunCraftProbe {
+    readonly $: 'RunCraftProbe'
+    weightedContribs: uint32
+}
+
+export const RunCraftProbe = {
+    PREFIX: 0x43505242,
+
+    create(args: {
+        weightedContribs: uint32
+    }): RunCraftProbe {
+        return {
+            $: 'RunCraftProbe',
+            ...args
+        }
+    },
+    fromSlice(s: c.Slice): RunCraftProbe {
+        loadAndCheckPrefix32(s, 0x43505242, 'RunCraftProbe');
+        return {
+            $: 'RunCraftProbe',
+            weightedContribs: s.loadUintBig(32),
+        }
+    },
+    store(self: RunCraftProbe, b: c.Builder): void {
+        b.storeUint(0x43505242, 32);
+        b.storeUint(self.weightedContribs, 32);
+    },
+    toCell(self: RunCraftProbe): c.Cell {
+        return makeCellFrom<RunCraftProbe>(self, RunCraftProbe.store);
     }
 }
 
 // ————————————————————————————————————————————
-//    class Empty
+//    class CraftGptMonoProbe
 //
 
 interface ExtraSendOptions {
@@ -240,12 +292,11 @@ function calculateDeployedAddress(code: c.Cell, data: c.Cell, options: DeployedA
     return new c.Address(options.workchain ?? 0, addrHash);
 }
 
-export class Empty implements c.Contract {
-    static CodeCell = c.Cell.fromBase64('te6ccgEBBAEATwABFP8A9KQT9LzyyAsBAgFiAgMAYND4kZEw4CDXLCFnAoiMjhcx7UTQ+kgw+JLHBfLgZPpIMMj6UsntVOAwhA8BxwDy9AARoIo72omh9JBh');
+export class CraftGptMonoProbe implements c.Contract {
+    static CodeCell = c.Cell.fromBase64('te6ccgEBBgEAxwABFP8A9KQT9LzyyAsBAgFiAgMAxtD4kZEw4CDXLCIagpIUjkgx7UTQAdcLHwH6SDBwIJNTE7mOKSGnH6YHgQEBqQimgCKnEaYDgQEBqQimgKghoAGAYakIpwOgqTgXAaQB6DEyyPpSyh/J7VTgMIIA//4BxwDy9AIBIAQFAG2+/0uBBJqYlcxxSQ04/TA8CAgNSEU0ARU4jTAcCAgNSEU0BUENAAwDDUhFOB0FScC4DSAPQ2EMAB+8k29qJofSRrhQ/BBCMoAE');
 
     static Errors = {
-        'Errors.NotOwner': 100,
-        'Errors.InvalidMessage': 65535,
+        'CraftProbeErrors.InvalidMessage': 65534,
     }
 
     readonly address: c.Address
@@ -257,22 +308,23 @@ export class Empty implements c.Contract {
     }
 
     static fromAddress(address: c.Address) {
-        return new Empty(address);
+        return new CraftGptMonoProbe(address);
     }
 
     static fromStorage(emptyStorage: {
         owner: c.Address
+        lastScore: int32
     }, deployedOptions?: DeployedAddrOptions) {
         const initialState = {
-            code: deployedOptions?.overrideContractCode ?? Empty.CodeCell,
-            data: Storage.toCell(Storage.create(emptyStorage)),
+            code: deployedOptions?.overrideContractCode ?? CraftGptMonoProbe.CodeCell,
+            data: CraftProbeStorage.toCell(CraftProbeStorage.create(emptyStorage)),
         };
         const address = calculateDeployedAddress(initialState.code, initialState.data, deployedOptions ?? {});
-        return new Empty(address, initialState);
+        return new CraftGptMonoProbe(address, initialState);
     }
 
-    static createCellOfAllowedMessage(body: AllowedMessage) {
-        return AllowedMessage.toCell(body);
+    static createCellOfCraftProbeMessage(body: CraftProbeMessage) {
+        return CraftProbeMessage.toCell(body);
     }
 
     async sendDeploy(provider: ContractProvider, via: Sender, msgValue: coins, extraOptions?: ExtraSendOptions) {
@@ -283,16 +335,28 @@ export class Empty implements c.Contract {
         });
     }
 
-    async sendAllowedMessage(provider: ContractProvider, via: Sender, msgValue: coins, body: AllowedMessage, extraOptions?: ExtraSendOptions) {
+    async sendCraftProbeMessage(provider: ContractProvider, via: Sender, msgValue: coins, body: CraftProbeMessage, extraOptions?: ExtraSendOptions) {
         return provider.internal(via, {
             value: msgValue,
-            body: AllowedMessage.toCell(body),
+            body: CraftProbeMessage.toCell(body),
             ...extraOptions
         });
     }
 
-    async getOwner(provider: ContractProvider): Promise<c.Address> {
-        const r = StackReader.fromGetMethod(1, await provider.get('owner', []));
-        return r.readSlice().loadAddress();
+    async getConfig(provider: ContractProvider): Promise<CraftProbeConfig> {
+        const r = StackReader.fromGetMethod(3, await provider.get('config', []));
+        return ({
+            $: 'CraftProbeConfig',
+            owner: r.readSlice().loadAddress(),
+            lastScore: r.readBigInt(),
+            fullTokenWeightedContribs: r.readBigInt(),
+        });
+    }
+
+    async getEstimate(provider: ContractProvider, weightedContribs: uint32): Promise<int32> {
+        const r = StackReader.fromGetMethod(1, await provider.get('estimate', [
+            { type: 'int', value: weightedContribs },
+        ]));
+        return r.readBigInt();
     }
 }

@@ -11,7 +11,7 @@ async function bootstrap() {
     import('./providers/AppProviders'),
   ]);
 
-  const savedTheme = localStorage.getItem('ton-dapp:theme');
+  const savedTheme = localStorage.getItem('ton-ai:theme');
   document.documentElement.setAttribute(
     'data-theme',
     savedTheme === 'light' ? 'light' : 'dark',

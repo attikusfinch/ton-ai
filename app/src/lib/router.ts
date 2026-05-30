@@ -6,9 +6,16 @@ interface Route {
   isTestnet: boolean;
 }
 
+function defaultNetwork(): Network {
+  return import.meta.env.VITE_TON_NETWORK === 'testnet' ? 'testnet' : 'mainnet';
+}
+
 function parseRoute(): Route {
   const params = new URLSearchParams(window.location.search);
-  return { isTestnet: params.get('testnet') === 'true' };
+  if (params.has('testnet')) {
+    return { isTestnet: params.get('testnet') === 'true' };
+  }
+  return { isTestnet: defaultNetwork() === 'testnet' };
 }
 
 function buildUrl(testnet: boolean) {

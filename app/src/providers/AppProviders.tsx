@@ -31,7 +31,7 @@ const lightColors = {
 
 function readInitialTheme() {
   if (typeof window === 'undefined') return THEME.DARK;
-  return localStorage.getItem('ton-dapp:theme') === 'light'
+  return localStorage.getItem('ton-ai:theme') === 'light'
     ? THEME.LIGHT
     : THEME.DARK;
 }
@@ -39,7 +39,7 @@ function readInitialTheme() {
 export function AppProviders({ children }: PropsWithChildren) {
   const [initialTheme] = useState(readInitialTheme);
   useEffect(() => {
-    const saved = localStorage.getItem('ton-dapp:theme');
+    const saved = localStorage.getItem('ton-ai:theme');
     document.documentElement.setAttribute(
       'data-theme',
       saved === 'light' ? 'light' : 'dark',

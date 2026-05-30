@@ -1,29 +1,105 @@
-import { useEffect, useState } from 'react';
 import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+import {
+  CHAIN,
   TonConnectButton,
   THEME,
   useTonAddress,
   useTonConnectUI,
+  useTonWallet,
 } from '@tonconnect/ui-react';
-import { Sun, Moon } from 'lucide-react';
+import { Address, Cell, toNano } from '@ton/core';
+import {
+  Bot,
+  CheckCircle2,
+  Copy,
+  Database,
+  ExternalLink,
+  LogOut,
+  Moon,
+  Pause,
+  Play,
+  Plug,
+  RefreshCw,
+  Rocket,
+  Send,
+  Sparkles,
+  Sun,
+  User,
+  Wallet,
+} from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { NetworkDropdown } from '@/components/NetworkDropdown';
+import { IconTonDiamond } from '@/components/TonDiamond';
 import { cn } from '@/lib/utils';
-import { NetworkDropdown } from './components/NetworkDropdown';
-import { useRouter } from './lib/router';
-import { formatAddressForNetwork } from './lib/ton';
-import { IconTonDiamond } from './components/TonDiamond';
+import { useRouter } from '@/lib/router';
+import {
+  formatAddressForNetwork,
+  getTonClient,
+  networkChain,
+  networkLabel,
+  tonviewerUrl,
+} from '@/lib/ton';
+import {
+  adminValue,
+  bodyFromContinue,
+  bodyFromCell,
+  bodyFromText,
+  continueValue,
+  createTonGptForOwner,
+  defaultPrompts,
+  deployValue,
+  parseTextComment,
+  replyValue,
+  stateInitToBase64,
+  textCommentCell,
+  tongptMetadata,
+} from '@/lib/tongpt';
+import { TonGpt, type TonGptConfig } from '@wrappers/TonGpt.gen';
+
+type StatusKind = 'idle' | 'pending' | 'success' | 'error';
+
+type AppStatus = {
+  kind: StatusKind;
+  text: string;
+};
+
+type ChatMessage = {
+  id: number;
+  role: 'user' | 'assistant' | 'system';
+  text: string;
+  state?: 'pending' | 'sent' | 'received' | 'error';
+  txHash?: string;
+};
+
+type ReplyMatch = {
+  text: string;
+  txHash: string;
+};
+
+const emptyStatus: AppStatus = { kind: 'idle', text: 'Ready' };
+
+const inputClass =
+  'h-10 rounded-md border bg-background px-3 text-[14px] outline-none transition focus:border-ring focus:ring-3 focus:ring-ring/30 disabled:opacity-60';
+const textareaClass =
+  'min-h-[88px] resize-none rounded-md border bg-background p-3 text-[14px] outline-none transition focus:border-ring focus:ring-3 focus:ring-ring/30 disabled:opacity-60';
 
 function useTheme() {
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    const stored = localStorage.getItem('ton-dapp:theme');
+    const stored = localStorage.getItem('ton-ai:theme');
     return stored === 'light' ? 'light' : 'dark';
   });
   const [tonConnectUI] = useTonConnectUI();
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('ton-dapp:theme', theme);
+    localStorage.setItem('ton-ai:theme', theme);
     tonConnectUI.uiOptions = {
       uiPreferences: { theme: theme === 'light' ? THEME.LIGHT : THEME.DARK },
     };
@@ -32,10 +108,142 @@ function useTheme() {
   return { theme, setTheme };
 }
 
+function formatError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function parseAddressOrNull(value: string): Address | null {
+  try {
+    return value.trim() ? Address.parse(value.trim()) : null;
+  } catch {
+    return null;
+  }
+}
+
+function shortAddress(address: string) {
+  if (address.length <= 18) return address;
+  return `${address.slice(0, 9)}...${address.slice(-8)}`;
+}
+
+function bigintText(value: bigint | null | undefined) {
+  return value === null || value === undefined ? '-' : value.toString();
+}
+
+function parseTonAmount(value: string): bigint | null {
+  const normalized = value.trim().replace(',', '.');
+  if (!/^\d+(\.\d{1,9})?$/.test(normalized)) return null;
+  return toNano(normalized);
+}
+
+function base64EmptyCell() {
+  return Cell.EMPTY.toBoc().toString('base64');
+}
+
+function StatusPill({ status }: { status: AppStatus }) {
+  return (
+    <div
+      className={cn(
+        'inline-flex h-8 max-w-full items-center gap-2 rounded-md border px-3 text-[13px]',
+        status.kind === 'error' && 'border-destructive/40 text-destructive',
+        status.kind === 'success' && 'border-success/40 text-success',
+        status.kind === 'pending' && 'border-primary/40 text-primary',
+      )}
+    >
+      {status.kind === 'pending' ? (
+        <span className="spinner size-3" />
+      ) : (
+        <CheckCircle2 className="size-3.5 opacity-70" />
+      )}
+      <span className="truncate">{status.text}</span>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  children,
+  className,
+}: {
+  label: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <label
+      className={cn('grid min-w-0 gap-1.5 text-[13px] font-medium', className)}
+    >
+      <span className="text-muted-foreground">{label}</span>
+      {children}
+    </label>
+  );
+}
+
 export default function App() {
   const { network, setTestnet } = useRouter();
   const walletAddress = useTonAddress();
+  const walletRawAddress = useTonAddress(false);
+  const wallet = useTonWallet();
+  const [tonConnectUI] = useTonConnectUI();
   const { theme, setTheme } = useTheme();
+
+  const storageKey = `ton-ai:${network}:tongpt-contract`;
+  const toncenterKeyStorageKey = `ton-ai:${network}:toncenter-key`;
+  const [contractInput, setContractInput] = useState(
+    () => localStorage.getItem(storageKey) ?? '',
+  );
+  const [toncenterKey, setToncenterKey] = useState(
+    () => localStorage.getItem(toncenterKeyStorageKey) ?? '',
+  );
+  const [prompt, setPrompt] = useState('Hello, how are you?');
+  const [previewPrompt, setPreviewPrompt] = useState('Do you use cache?');
+  const [previewResult, setPreviewResult] = useState('-');
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [status, setStatus] = useState<AppStatus>(emptyStatus);
+  const [config, setConfig] = useState<TonGptConfig | null>(null);
+  const [contractBalance, setContractBalance] = useState<bigint | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [chat, setChat] = useState<ChatMessage[]>([
+    {
+      id: 1,
+      role: 'system',
+      text: 'TONGPT trained recurrent model',
+      state: 'received',
+    },
+  ]);
+
+  const client = useMemo(
+    () => getTonClient(network, toncenterKey),
+    [network, toncenterKey],
+  );
+
+  useEffect(() => {
+    const saved = localStorage.getItem(storageKey) ?? '';
+    setContractInput(saved);
+    setConfig(null);
+    setContractBalance(null);
+  }, [storageKey]);
+
+  useEffect(() => {
+    setToncenterKey(localStorage.getItem(toncenterKeyStorageKey) ?? '');
+  }, [toncenterKeyStorageKey]);
+
+  const saveToncenterKey = useCallback(
+    (value: string) => {
+      setToncenterKey(value);
+      const normalized = value.trim();
+      if (normalized) localStorage.setItem(toncenterKeyStorageKey, normalized);
+      else localStorage.removeItem(toncenterKeyStorageKey);
+    },
+    [toncenterKeyStorageKey],
+  );
+
+  const walletChainMatches =
+    !wallet ||
+    (network === 'testnet'
+      ? wallet.account.chain === CHAIN.TESTNET
+      : wallet.account.chain === CHAIN.MAINNET);
 
   const userWallet = walletAddress
     ? (() => {
@@ -47,64 +255,779 @@ export default function App() {
       })()
     : '';
 
+  const contractAddress = useMemo(
+    () => parseAddressOrNull(contractInput),
+    [contractInput],
+  );
+
+  const contractForDisplay = contractAddress
+    ? contractAddress.toString({
+        bounceable: false,
+        testOnly: network === 'testnet',
+      })
+    : contractInput.trim();
+
+  const ownerAddress = useMemo(
+    () => parseAddressOrNull(walletRawAddress || walletAddress),
+    [walletRawAddress, walletAddress],
+  );
+
+  const derivedContract = useMemo(
+    () => (ownerAddress ? createTonGptForOwner(ownerAddress) : null),
+    [ownerAddress],
+  );
+
+  const derivedAddress = derivedContract
+    ? derivedContract.address.toString({
+        bounceable: false,
+        testOnly: network === 'testnet',
+      })
+    : '';
+
+  const openedContract = useMemo(
+    () =>
+      contractAddress ? client.open(TonGpt.fromAddress(contractAddress)) : null,
+    [client, contractAddress],
+  );
+
+  const isOwner = Boolean(
+    config && ownerAddress && config.owner.equals(ownerAddress),
+  );
+  const canUseContract = Boolean(contractAddress);
+  const canSend = Boolean(
+    walletAddress && walletChainMatches && canUseContract,
+  );
+  const canWithdraw = Boolean(canSend && isOwner && withdrawAmount.trim());
+  const generationValueTon =
+    Number(replyValue) / 1_000_000_000 +
+    (Number(continueValue) / 1_000_000_000) * tongptMetadata.maxGenerate;
+
+  const saveContractInput = useCallback(
+    (value: string) => {
+      setContractInput(value);
+      if (value.trim()) localStorage.setItem(storageKey, value.trim());
+      else localStorage.removeItem(storageKey);
+    },
+    [storageKey],
+  );
+
+  const refreshConfig = useCallback(async () => {
+    if (!openedContract || !contractAddress) {
+      setConfig(null);
+      setContractBalance(null);
+      return;
+    }
+
+    setIsRefreshing(true);
+    try {
+      const [nextConfig, balance] = await Promise.all([
+        openedContract.getConfig(),
+        client.getBalance(contractAddress),
+      ]);
+      setConfig(nextConfig);
+      setContractBalance(balance);
+      setStatus({ kind: 'success', text: 'Config refreshed' });
+    } catch (error) {
+      setConfig(null);
+      setStatus({ kind: 'error', text: formatError(error) });
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [client, contractAddress, openedContract]);
+
+  useEffect(() => {
+    void refreshConfig();
+  }, [refreshConfig]);
+
+  type TonConnectMessage = {
+    address: string;
+    amount: string;
+    payload?: string;
+    stateInit?: string;
+  };
+
+  const sendMessages = useCallback(
+    async (messages: TonConnectMessage[]) => {
+      if (!walletAddress) throw new Error('Connect wallet');
+      if (!walletChainMatches) {
+        throw new Error(`Switch wallet to ${networkLabel(network)}`);
+      }
+
+      return tonConnectUI.sendTransaction({
+        validUntil: Math.floor(Date.now() / 1000) + 300,
+        network: networkChain(network),
+        messages,
+      });
+    },
+    [network, tonConnectUI, walletAddress, walletChainMatches],
+  );
+
+  const sendSingleMessage = useCallback(
+    async (message: TonConnectMessage) => sendMessages([message]),
+    [sendMessages],
+  );
+
+  const buildGenerationMessages = useCallback(
+    (address: string, text: string, jobId: bigint, steps: number) => {
+      const messages: TonConnectMessage[] = [
+        {
+          address,
+          amount: replyValue,
+          payload: bodyFromText(text),
+        },
+      ];
+      for (let step = 0; step < steps; step += 1) {
+        messages.push({
+          address,
+          amount: continueValue,
+          payload: bodyFromContinue(jobId),
+        });
+      }
+      return messages;
+    },
+    [],
+  );
+
+  const findLatestReply = useCallback(
+    async (sinceUnix: number): Promise<ReplyMatch | null> => {
+      if (!contractAddress || !ownerAddress) return null;
+
+      const contractTransactions = await client.getTransactions(contractAddress, {
+        limit: 40,
+        archival: false,
+      });
+
+      for (const tx of contractTransactions) {
+        if (tx.now < sinceUnix - 30) continue;
+        for (const message of tx.outMessages.values()) {
+          if (message.info.type !== 'internal') continue;
+          if (!message.info.src.equals(contractAddress)) continue;
+          if (!message.info.dest.equals(ownerAddress)) continue;
+
+          const text = parseTextComment(message.body);
+          if (text === null) continue;
+
+          return {
+            text,
+            txHash: tx.hash().toString('hex'),
+          };
+        }
+      }
+
+      const walletTransactions = await client.getTransactions(ownerAddress, {
+        limit: 20,
+        archival: false,
+      });
+
+      for (const tx of walletTransactions) {
+        if (tx.now < sinceUnix - 30) continue;
+        const message = tx.inMessage;
+        if (!message || message.info.type !== 'internal') continue;
+        if (!message.info.src.equals(contractAddress)) continue;
+
+        const text = parseTextComment(message.body);
+        if (text === null) continue;
+
+        return {
+          text,
+          txHash: tx.hash().toString('hex'),
+        };
+      }
+
+      return null;
+    },
+    [client, contractAddress, ownerAddress],
+  );
+
+  const pollReply = useCallback(async () => {
+    const sinceUnix = Math.floor(Date.now() / 1000);
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, attempt === 0 ? 1800 : 4000),
+      );
+      try {
+        const reply = await findLatestReply(sinceUnix);
+        if (reply) return reply;
+      } catch {
+        // Indexers can lag or a wallet can be fresh. Keep polling.
+      }
+    }
+    return null;
+  }, [findLatestReply]);
+
+  const deployContract = async () => {
+    if (!derivedContract) {
+      setStatus({ kind: 'error', text: 'Connect wallet first' });
+      return;
+    }
+
+    setStatus({ kind: 'pending', text: 'Deploy transaction' });
+    try {
+      await sendSingleMessage({
+        address: derivedContract.address.toString({
+          bounceable: false,
+          testOnly: network === 'testnet',
+        }),
+        amount: deployValue,
+        stateInit: stateInitToBase64(derivedContract),
+        payload: base64EmptyCell(),
+      });
+      saveContractInput(
+        derivedContract.address.toString({
+          bounceable: false,
+          testOnly: network === 'testnet',
+        }),
+      );
+      setStatus({ kind: 'success', text: 'Deploy sent' });
+      setTimeout(() => void refreshConfig(), 3500);
+    } catch (error) {
+      setStatus({ kind: 'error', text: formatError(error) });
+    }
+  };
+
+  const sendPrompt = async (event?: FormEvent) => {
+    event?.preventDefault();
+    if (!contractAddress || !openedContract || !prompt.trim()) return;
+
+    const text = prompt.trim();
+    const contractTarget = contractAddress.toString({
+      bounceable: false,
+      testOnly: network === 'testnet',
+    });
+    const userMessageId = Date.now();
+    const assistantMessageId = userMessageId + 1;
+    setChat((items) => [
+      ...items,
+      { id: userMessageId, role: 'user', text, state: 'sent' },
+      {
+        id: assistantMessageId,
+        role: 'assistant',
+        text: 'Waiting for reply transaction',
+        state: 'pending',
+      },
+    ]);
+
+    setIsSending(true);
+    setStatus({ kind: 'pending', text: 'Preparing generation job' });
+    try {
+      const nextConfig = await openedContract.getConfig();
+      setConfig(nextConfig);
+      const steps = Math.max(1, Number(nextConfig.maxGenerate));
+      const messages = buildGenerationMessages(
+        contractTarget,
+        text,
+        nextConfig.nextJobId,
+        steps,
+      );
+      setStatus({
+        kind: 'pending',
+        text: `Generation transaction (${messages.length} messages)`,
+      });
+      await sendMessages(messages);
+      setStatus({ kind: 'pending', text: 'Waiting for reply' });
+      const reply = await pollReply();
+
+      setChat((items) =>
+        items.map((item) =>
+          item.id === assistantMessageId
+            ? {
+                ...item,
+                text: reply?.text ?? 'Reply not found yet',
+                state: reply ? 'received' : 'error',
+                txHash: reply?.txHash,
+              }
+            : item,
+        ),
+      );
+      setStatus({
+        kind: reply ? 'success' : 'error',
+        text: reply ? 'Reply received' : 'Reply not found',
+      });
+    } catch (error) {
+      setChat((items) =>
+        items.map((item) =>
+          item.id === assistantMessageId
+            ? { ...item, text: formatError(error), state: 'error' }
+            : item,
+        ),
+      );
+      setStatus({ kind: 'error', text: formatError(error) });
+    } finally {
+      setIsSending(false);
+      setTimeout(() => void refreshConfig(), 3500);
+    }
+  };
+
+  const sendAdminBody = async (body: Cell, label: string) => {
+    if (!contractAddress) return;
+    setStatus({ kind: 'pending', text: label });
+    try {
+      await sendSingleMessage({
+        address: contractAddress.toString({
+          bounceable: false,
+          testOnly: network === 'testnet',
+        }),
+        amount: adminValue,
+        payload: bodyFromCell(body),
+      });
+      setStatus({ kind: 'success', text: `${label} sent` });
+      setTimeout(() => void refreshConfig(), 3500);
+    } catch (error) {
+      setStatus({ kind: 'error', text: formatError(error) });
+    }
+  };
+
+  const togglePaused = async () => {
+    await sendAdminBody(
+      TonGpt.createCellOfSetTonGptPaused({
+        isPaused: !(config?.isPaused ?? false),
+      }),
+      config?.isPaused ? 'Unpause' : 'Pause',
+    );
+  };
+
+  const withdrawTon = async () => {
+    if (!ownerAddress) {
+      setStatus({ kind: 'error', text: 'Connect owner wallet' });
+      return;
+    }
+    const amount = parseTonAmount(withdrawAmount);
+    if (amount === null || amount <= 0n) {
+      setStatus({ kind: 'error', text: 'Invalid withdraw amount' });
+      return;
+    }
+
+    await sendAdminBody(
+      TonGpt.createCellOfWithdrawTonGpt({
+        to: ownerAddress,
+        amount,
+      }),
+      'Withdraw',
+    );
+    setWithdrawAmount('');
+  };
+
+  const runPreview = async () => {
+    if (!openedContract || !previewPrompt.trim()) return;
+    setPreviewResult('Loading...');
+    try {
+      const cell = await openedContract.getGenerate(
+        textCommentCell(previewPrompt.trim()),
+      );
+      setPreviewResult(parseTextComment(cell) ?? '(non-text reply)');
+    } catch (error) {
+      setPreviewResult(formatError(error));
+    }
+  };
+
+  const copyContract = async () => {
+    if (!contractForDisplay) return;
+    await navigator.clipboard.writeText(contractForDisplay);
+    setStatus({ kind: 'success', text: 'Address copied' });
+  };
+
+  const contractTonviewer = contractAddress
+    ? `${tonviewerUrl(network)}/${contractAddress.toString({
+        bounceable: false,
+        testOnly: network === 'testnet',
+      })}`
+    : '';
+
   return (
-    <div className="min-h-screen flex flex-col">
-      {/* ─── Topbar ─── */}
-      <header className="flex items-center justify-between px-7 h-[60px] border-b sticky top-0 z-50 bg-background max-sm:px-4 max-sm:h-auto max-sm:flex-wrap max-sm:gap-2.5 max-sm:py-3">
-        <div className="flex items-center gap-2.5 text-[17px] font-bold max-sm:text-[15px]">
-          <div className="w-8 h-8 rounded-[9px] bg-[#0098EA] flex items-center justify-center max-sm:w-7 max-sm:h-7 max-sm:rounded-[7px]">
-            <IconTonDiamond size={16} />
+    <div className="min-h-screen bg-background text-foreground">
+      <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur">
+        <div className="mx-auto flex min-h-[64px] w-full max-w-[1440px] items-center justify-between gap-3 px-6 py-3 max-md:flex-wrap max-sm:px-4">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[#0098EA]">
+              <IconTonDiamond size={18} />
+            </div>
+            <div className="min-w-0">
+              <div className="text-[16px] font-bold">TONGPT</div>
+              <div className="truncate text-[12px] text-muted-foreground">
+                {contractAddress
+                  ? shortAddress(contractForDisplay)
+                  : 'No contract'}
+              </div>
+            </div>
           </div>
-          TON dApp
-        </div>
-        <div className="flex items-center gap-2.5">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="rounded-full size-10 bg-secondary max-sm:size-9"
-            title="Toggle theme"
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-          >
-            {theme === 'dark' ? (
-              <Sun className="size-[18px]" />
-            ) : (
-              <Moon className="size-[18px]" />
-            )}
-          </Button>
-          <NetworkDropdown network={network} setTestnet={setTestnet} />
-          <TonConnectButton />
+
+          <div className="flex min-w-0 items-center gap-2 max-sm:w-full max-sm:flex-wrap">
+            <StatusPill status={status} />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-10 rounded-md bg-secondary"
+              title="Toggle theme"
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            >
+              {theme === 'dark' ? <Sun /> : <Moon />}
+            </Button>
+            <NetworkDropdown network={network} setTestnet={setTestnet} />
+            <TonConnectButton />
+          </div>
         </div>
       </header>
 
-      {/* ─── Main content ─── */}
-      <main className="flex-1 py-8 px-6 max-w-[1200px] mx-auto w-full">
-        <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
-          <div className="w-16 h-16 rounded-2xl bg-[#0098EA] flex items-center justify-center">
-            <IconTonDiamond size={32} />
-          </div>
-          <h1 className="text-[22px] font-semibold tracking-tight">
-            TON dApp Template
-          </h1>
-          <p className="text-muted-foreground text-[15px] max-w-md">
-            Connect your wallet and start building.
-            {userWallet && (
-              <span className="block mt-2 font-mono text-[13px] text-foreground/70 break-all">
-                {userWallet}
-              </span>
-            )}
-          </p>
-          <p className="text-muted-foreground text-[13px]">
-            Network:{' '}
-            <span
-              className={cn(
-                'font-semibold',
-                network === 'mainnet' ? 'text-success' : 'text-warning',
+      <main className="mx-auto grid w-full max-w-[1440px] grid-cols-[340px_minmax(0,1fr)_360px] gap-4 px-6 py-5 max-xl:grid-cols-[320px_minmax(0,1fr)] max-lg:grid-cols-1 max-sm:px-4">
+        <section className="grid min-w-0 content-start gap-4">
+          <div className="rounded-lg border bg-card p-4">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 font-semibold">
+                <Plug className="size-4 text-primary" />
+                Contract
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                title="Refresh config"
+                onClick={() => void refreshConfig()}
+                disabled={!contractAddress || isRefreshing}
+              >
+                <RefreshCw className={cn(isRefreshing && 'animate-spin')} />
+              </Button>
+            </div>
+
+            <div className="grid gap-3">
+              <Field label="Address">
+                <div className="flex gap-2">
+                  <input
+                    className={cn(
+                      inputClass,
+                      'min-w-0 flex-1 font-mono text-[12px]',
+                    )}
+                    value={contractInput}
+                    onChange={(event) => saveContractInput(event.target.value)}
+                    placeholder="EQ..."
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="icon"
+                    title="Copy address"
+                    onClick={() => void copyContract()}
+                    disabled={!contractForDisplay}
+                  >
+                    <Copy />
+                  </Button>
+                </div>
+              </Field>
+
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() =>
+                    derivedAddress && saveContractInput(derivedAddress)
+                  }
+                  disabled={!derivedAddress}
+                  title="Use derived address"
+                >
+                  <Wallet />
+                  Derive
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => void deployContract()}
+                  disabled={!derivedContract || !walletChainMatches}
+                  title="Deploy TONGPT"
+                >
+                  <Rocket />
+                  Deploy
+                </Button>
+              </div>
+
+              <div className="grid gap-2 rounded-md border bg-background p-3 text-[13px]">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">Wallet</span>
+                  <span className="min-w-0 truncate font-mono">
+                    {userWallet ? shortAddress(userWallet) : 'Disconnected'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">Network</span>
+                  <span
+                    className={cn(
+                      'font-semibold',
+                      network === 'mainnet' ? 'text-success' : 'text-warning',
+                    )}
+                  >
+                    {networkLabel(network)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">Balance</span>
+                  <span className="font-mono">
+                    {contractBalance === null
+                      ? '-'
+                      : `${Number(contractBalance) / 1_000_000_000} TON`}
+                  </span>
+                </div>
+              </div>
+
+              <Field label="Toncenter API key">
+                <input
+                  className={cn(inputClass, 'font-mono text-[12px]')}
+                  value={toncenterKey}
+                  onChange={(event) => saveToncenterKey(event.target.value)}
+                  placeholder={`${networkLabel(network)} key`}
+                  type="password"
+                  autoComplete="off"
+                />
+              </Field>
+
+              <Field label="Withdraw TON">
+                <div className="flex gap-2">
+                  <input
+                    className={cn(inputClass, 'min-w-0 flex-1 font-mono')}
+                    value={withdrawAmount}
+                    onChange={(event) => setWithdrawAmount(event.target.value)}
+                    placeholder="0.1"
+                    inputMode="decimal"
+                    disabled={!isOwner}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => void withdrawTon()}
+                    disabled={!canWithdraw}
+                    title="Withdraw to connected owner wallet"
+                  >
+                    <LogOut />
+                    Withdraw
+                  </Button>
+                </div>
+              </Field>
+
+              {contractTonviewer && (
+                <Button variant="outline" asChild>
+                  <a href={contractTonviewer} target="_blank" rel="noreferrer">
+                    <ExternalLink />
+                    Tonviewer
+                  </a>
+                </Button>
               )}
+            </div>
+          </div>
+
+          <div className="rounded-lg border bg-card p-4">
+            <div className="mb-4 flex items-center gap-2 font-semibold">
+              <Sparkles className="size-4 text-primary" />
+              Model
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[13px]">
+              {[
+                ['Hidden', tongptMetadata.hidden],
+                ['Tokens', tongptMetadata.tokenCount],
+                ['Context', tongptMetadata.maxContext],
+                ['Generate', tongptMetadata.maxGenerate],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-md border bg-background p-3">
+                  <div className="text-muted-foreground">{label}</div>
+                  <div className="mt-1 font-mono text-[15px]">{value}</div>
+                </div>
+              ))}
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              className="mt-3 w-full"
+              disabled={!canSend}
+              onClick={() => void togglePaused()}
             >
-              {network === 'mainnet' ? 'Mainnet' : 'Testnet'}
-            </span>
-          </p>
-        </div>
+              {config?.isPaused ? <Play /> : <Pause />}
+              {config?.isPaused ? 'Unpause' : 'Pause'}
+            </Button>
+          </div>
+        </section>
+
+        <section className="grid min-h-[720px] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-lg border bg-card max-sm:min-h-[560px]">
+          <div className="flex min-w-0 items-center justify-between gap-3 border-b p-4">
+            <div className="flex shrink-0 items-center gap-2 font-semibold">
+              <Bot className="size-4 text-primary" />
+              Tolki
+            </div>
+            <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
+              {defaultPrompts.map((item) => (
+                <Button
+                  key={item}
+                  variant="secondary"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => setPrompt(item)}
+                >
+                  {item}
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          <div className="min-h-0 space-y-3 overflow-y-auto p-4">
+            {chat.map((item) => (
+              <div
+                key={item.id}
+                className={cn(
+                  'flex gap-3',
+                  item.role === 'user' && 'justify-end',
+                  item.role === 'system' && 'justify-center',
+                )}
+              >
+                {item.role === 'assistant' && (
+                  <div className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
+                    <Bot className="size-4" />
+                  </div>
+                )}
+                <div
+                  className={cn(
+                    'max-w-[78%] rounded-lg border px-3.5 py-3 text-[14px]',
+                    item.role === 'user' &&
+                      'bg-primary text-primary-foreground',
+                    item.role === 'assistant' && 'bg-background',
+                    item.role === 'system' &&
+                      'bg-secondary text-muted-foreground',
+                    item.state === 'error' &&
+                      'border-destructive/50 text-destructive',
+                  )}
+                >
+                  <div className="whitespace-pre-wrap break-words">
+                    {item.text}
+                  </div>
+                  {item.state === 'pending' && (
+                    <div className="mt-2 flex items-center gap-2 text-[12px] opacity-70">
+                      <span className="spinner size-3" />
+                      Pending
+                    </div>
+                  )}
+                  {item.txHash && (
+                    <a
+                      className="mt-2 inline-flex items-center gap-1 text-[12px] text-primary"
+                      href={`${tonviewerUrl(network)}/transaction/${item.txHash}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      tx {shortAddress(item.txHash)}
+                      <ExternalLink className="size-3" />
+                    </a>
+                  )}
+                </div>
+                {item.role === 'user' && (
+                  <div className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-md bg-secondary">
+                    <User className="size-4" />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <form
+            className="grid gap-3 border-t p-4"
+            onSubmit={(event) => void sendPrompt(event)}
+          >
+            <textarea
+              className={textareaClass}
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              disabled={isSending}
+            />
+            <div className="flex items-center justify-between gap-3 max-sm:flex-col max-sm:items-stretch">
+              <div className="text-[13px] text-muted-foreground">
+                {canSend
+                  ? `${generationValueTon.toFixed(2)} TON / ${
+                      tongptMetadata.maxGenerate + 1
+                    } messages`
+                  : walletAddress
+                    ? 'Contract required'
+                    : 'Wallet required'}
+              </div>
+              <Button disabled={!canSend || isSending || !prompt.trim()}>
+                {isSending ? <span className="spinner" /> : <Send />}
+                Send Comment
+              </Button>
+            </div>
+          </form>
+        </section>
+
+        <section className="grid min-w-0 content-start gap-4 max-xl:col-span-2 max-lg:col-span-1">
+          <div className="rounded-lg border bg-card p-4">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 font-semibold">
+                <Database className="size-4 text-primary" />
+                Config
+              </div>
+              <span
+                className={cn(
+                  'rounded-md border px-2 py-1 text-[12px] font-semibold',
+                  config?.isPaused
+                    ? 'border-warning/40 text-warning'
+                    : 'border-success/40 text-success',
+                )}
+              >
+                {config?.isPaused ? 'Paused' : 'Live'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-[13px]">
+              {[
+                ['Candidates', bigintText(config?.candidateCount)],
+                ['Next job', bigintText(config?.nextJobId)],
+                ['EOS', bigintText(config?.eosToken)],
+                ['Context', bigintText(config?.maxContext)],
+                ['Generate', bigintText(config?.maxGenerate)],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-md border bg-background p-3">
+                  <div className="text-muted-foreground">{label}</div>
+                  <div className="mt-1 font-mono text-[15px]">{value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-3 rounded-md border bg-background p-3 text-[13px]">
+              <div className="text-muted-foreground">Owner</div>
+              <div className="mt-1 break-all font-mono text-[12px]">
+                {config
+                  ? config.owner.toString({
+                      bounceable: false,
+                      testOnly: network === 'testnet',
+                    })
+                  : '-'}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border bg-card p-4">
+            <div className="mb-4 flex items-center gap-2 font-semibold">
+              <Bot className="size-4 text-primary" />
+              Preview
+            </div>
+            <div className="grid gap-3">
+              <Field label="Get-method prompt">
+                <textarea
+                  className={cn(textareaClass, 'min-h-[68px]')}
+                  value={previewPrompt}
+                  onChange={(event) => setPreviewPrompt(event.target.value)}
+                />
+              </Field>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!openedContract || !previewPrompt.trim()}
+                onClick={() => void runPreview()}
+              >
+                <RefreshCw />
+                Generate
+              </Button>
+              <div className="min-h-16 rounded-md border bg-background p-3 text-[13px] text-muted-foreground">
+                {previewResult}
+              </div>
+            </div>
+          </div>
+
+          {!walletChainMatches && (
+            <div className="rounded-lg border border-warning/40 bg-card p-4 text-[13px] text-warning">
+              Wallet network mismatch
+            </div>
+          )}
+        </section>
       </main>
     </div>
   );

@@ -1,15 +1,35 @@
 [package]
-name = "ton_onchain_minecraft"
-description = "Minecraft-like on-chain voxel world on TON"
+name = "ton_ai"
+description = "Tiny on-chain language model experiment on TON"
 version = "0.1.0"
 license = "MIT"
 
 [toolchain]
 acton = "1.0.0"
 
-[contracts.Empty]
-display-name = "Empty"
-src = "contracts/src/Empty.tolk"
+[contracts.TinyLm]
+display-name = "TinyLM"
+src = "contracts/src/TinyLm.tolk"
+depends = []
+
+[contracts.ShardedLmCoordinator]
+display-name = "ShardedLMCoordinator"
+src = "contracts/src/ShardedLmCoordinator.tolk"
+depends = []
+
+[contracts.VocabShard]
+display-name = "VocabShard"
+src = "contracts/src/VocabShard.tolk"
+depends = []
+
+[contracts.CraftGptMonoProbe]
+display-name = "CraftGPTMonoProbe"
+src = "contracts/src/CraftGptMonoProbe.tolk"
+depends = []
+
+[contracts.TonGpt]
+display-name = "TONGPT"
+src = "contracts/src/TonGpt.tolk"
 depends = []
 
 [test]

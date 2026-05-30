@@ -5,7 +5,13 @@ import { CHAIN } from '@tonconnect/ui-react';
 
 import type { Network } from './router';
 
-export function toncenterApiKey(network: Network): string | undefined {
+export function toncenterApiKey(
+  network: Network,
+  override?: string,
+): string | undefined {
+  const normalized = override?.trim();
+  if (normalized) return normalized;
+
   return network === 'testnet'
     ? import.meta.env.TONCENTER_TESTNET_API_KEY
     : import.meta.env.TONCENTER_MAINNET_API_KEY;
@@ -45,16 +51,21 @@ export function formatAddressForNetwork(
   });
 }
 
-const clientCache = new Map<Network, TonClient>();
+const clientCache = new Map<string, TonClient>();
 
-export function getTonClient(network: Network): TonClient {
-  const existing = clientCache.get(network);
+export function getTonClient(
+  network: Network,
+  apiKeyOverride?: string,
+): TonClient {
+  const apiKey = toncenterApiKey(network, apiKeyOverride);
+  const cacheKey = `${network}:${apiKey ?? ''}`;
+  const existing = clientCache.get(cacheKey);
   if (existing) return existing;
   const client = new TonClient({
     endpoint: toncenterRpcUrl(network),
-    apiKey: toncenterApiKey(network),
+    apiKey,
   });
-  clientCache.set(network, client);
+  clientCache.set(cacheKey, client);
   return client;
 }
 
