@@ -31,6 +31,7 @@ import {
   Send,
   Sparkles,
   Sun,
+  Upload,
   User,
   Wallet,
 } from 'lucide-react';
@@ -50,6 +51,7 @@ import {
 import {
   deriveDirectWalletAddress,
   sendDirectWalletMessages,
+  waitForDirectWalletSeqno,
 } from '@/lib/proSigner';
 import {
   adminValue,
@@ -58,12 +60,15 @@ import {
   bodyFromText,
   continueValue,
   createTonGptForOwner,
+  createTonGptUploadChunks,
   defaultPrompts,
   deployValue,
   parseTextComment,
   replyValue,
   stateInitToBase64,
   tongptMetadata,
+  uploadMessagesPerTransaction,
+  uploadValue,
 } from '@/lib/tongpt';
 import { TonGpt, type TonGptConfig } from '@wrappers/TonGpt.gen';
 
@@ -244,6 +249,11 @@ export default function App() {
   const [contractBalance, setContractBalance] = useState<bigint | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isUploadingModel, setIsUploadingModel] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{
+    sent: number;
+    total: number;
+  } | null>(null);
   const [chat, setChat] = useState<ChatMessage[]>([
     {
       id: 1,
@@ -382,11 +392,21 @@ export default function App() {
     (proMode ? hasProSeed : walletAddress && walletChainMatches),
   );
   const canWithdraw = Boolean(canSend && isOwner && withdrawAmount.trim());
+  const canUploadModel = Boolean(
+    contractAddress &&
+    proMode &&
+    hasProSeed &&
+    !isSending &&
+    !isUploadingModel &&
+    (!config || !proSignerAddress || isOwner),
+  );
   const generationValueTon =
     Number(replyValue) / 1_000_000_000 +
     (Number(continueValue) / 1_000_000_000) *
       tongptMetadata.maxGenerate *
       tongptMetadata.continuationWindows;
+  const uploadValueTon =
+    (Number(uploadValue) / 1_000_000_000) * tongptMetadata.uploadChunks;
 
   const saveContractInput = useCallback(
     (value: string) => {
@@ -723,6 +743,76 @@ export default function App() {
     }
   };
 
+  const uploadModel = async () => {
+    if (!contractAddress) return;
+    if (!proMode) {
+      setStatus({ kind: 'error', text: 'Direct signer required for upload' });
+      return;
+    }
+
+    setIsUploadingModel(true);
+    setUploadProgress(null);
+    try {
+      const signerAddress = await ensureProSignerAddress();
+      const signerOwner = Address.parse(signerAddress);
+      if (config && !config.owner.equals(signerOwner)) {
+        throw new Error('Direct signer is not contract owner');
+      }
+
+      const chunks = createTonGptUploadChunks();
+      const contractTarget = contractAddress.toString({
+        bounceable: false,
+        testOnly: network === 'testnet',
+      });
+      setUploadProgress({ sent: 0, total: chunks.length });
+
+      for (
+        let start = 0;
+        start < chunks.length;
+        start += uploadMessagesPerTransaction
+      ) {
+        const batchChunks = chunks.slice(
+          start,
+          start + uploadMessagesPerTransaction,
+        );
+        const end = start + batchChunks.length;
+        setStatus({
+          kind: 'pending',
+          text: `Uploading weights ${start + 1}-${end}/${chunks.length}`,
+        });
+
+        const result = await sendMessages(
+          batchChunks.map((chunk) => ({
+            address: contractTarget,
+            amount: uploadValue,
+            payload: bodyFromCell(chunk.body),
+          })),
+        );
+
+        setStatus({
+          kind: 'pending',
+          text: `Confirming weights ${end}/${chunks.length}`,
+        });
+        if (isRecord(result) && typeof result.seqno === 'number') {
+          await waitForDirectWalletSeqno(
+            client,
+            network,
+            proSeed,
+            result.seqno + 1,
+          );
+        }
+        setUploadProgress({ sent: end, total: chunks.length });
+      }
+
+      setStatus({ kind: 'success', text: 'Model upload complete' });
+      setTimeout(() => void refreshConfig(), 1500);
+    } catch (error) {
+      setStatus({ kind: 'error', text: formatError(error) });
+    } finally {
+      setIsUploadingModel(false);
+    }
+  };
+
   const togglePaused = async () => {
     await sendAdminBody(
       TonGpt.createCellOfSetTonGptPaused({
@@ -1046,7 +1136,25 @@ export default function App() {
               type="button"
               variant="secondary"
               className="mt-3 w-full"
-              disabled={!canSend}
+              disabled={!canUploadModel}
+              onClick={() => void uploadModel()}
+              title="Upload TONGPT weights"
+            >
+              {isUploadingModel ? <span className="spinner" /> : <Upload />}
+              {isUploadingModel && uploadProgress
+                ? `Uploading ${uploadProgress.sent}/${uploadProgress.total}`
+                : 'Upload Weights'}
+            </Button>
+            <div className="mt-2 text-[12px] text-muted-foreground">
+              {proMode
+                ? `${tongptMetadata.uploadChunks} chunks / ${tongptMetadata.uploadTransactions} transactions / ${uploadValueTon.toFixed(2)} TON funding`
+                : 'Direct signer required for model upload'}
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              className="mt-3 w-full"
+              disabled={!canSend || isUploadingModel}
               onClick={() => void togglePaused()}
             >
               {config?.isPaused ? <Play /> : <Pause />}
@@ -1141,7 +1249,7 @@ export default function App() {
               className={textareaClass}
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
-              disabled={isSending}
+              disabled={isSending || isUploadingModel}
             />
             <div className="flex items-center justify-between gap-3 max-sm:flex-col max-sm:items-stretch">
               <div className="text-[13px] text-muted-foreground">
@@ -1159,7 +1267,11 @@ export default function App() {
                         ? 'Wallet network required'
                         : 'Wallet required'}
               </div>
-              <Button disabled={!canSend || isSending || !prompt.trim()}>
+              <Button
+                disabled={
+                  !canSend || isSending || isUploadingModel || !prompt.trim()
+                }
+              >
                 {isSending ? <span className="spinner" /> : <Send />}
                 Send Comment
               </Button>

@@ -1419,6 +1419,7 @@ fun defaultTonGptStorage(owner: address): TonGptStorage {
         maxContext: 80,
         maxGenerate: 8,
         eosToken: 0,
+        candidateCount: tongptCandidateCount(),
         model: defaultTonGptModelStorage(),
         jobs: [],
         isPaused: false,

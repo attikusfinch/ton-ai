@@ -105,6 +105,7 @@ struct TonGptStorage {
     maxContext: uint8
     maxGenerate: uint8
     eosToken: uint16
+    candidateCount: uint16
     model: Cell<TonGptModelStorage>
     jobs: map<uint32, TonGptJob>
     isPaused: bool
@@ -120,7 +121,12 @@ struct TonGptConfig {
     isPaused: bool
 }
 
-type TonGptMessage = SetTonGptPaused | WithdrawTonGpt | ContinueTonGpt
+type TonGptMessage =
+    | SetTonGptPaused
+    | WithdrawTonGpt
+    | ContinueTonGpt
+    | UploadTonGptPromptChunk
+    | UploadTonGptOutputChunk
 
 struct (0x54475053) SetTonGptPaused {
     isPaused: bool
@@ -133,6 +139,18 @@ struct (0x54475744) WithdrawTonGpt {
 
 struct (0x5447434e) ContinueTonGpt {
     jobId: uint32
+}
+
+struct (0x54475550) UploadTonGptPromptChunk {
+    byteEmbeddings: map<uint8, TonGptVector>
+    positionEmbeddings: map<uint8, TonGptVector>
+    pairEmbeddings: map<uint16, TonGptVector>
+}
+
+struct (0x5447554f) UploadTonGptOutputChunk {
+    tokenEmbeddings: map<uint16, TonGptVector>
+    heads: map<uint16, TonGptHead>
+    tokenBytes: map<uint16, cell>
 }
 
 fun TonGptStorage.load(): TonGptStorage {
@@ -153,6 +171,90 @@ fun TonGptModelStorage.promptData(self): TonGptPromptEmbeddings {
 
 fun TonGptModelStorage.outputData(self): TonGptOutputWeights {
     return TonGptOutputWeights.fromCell(self.output);
+}
+
+fun emptyTonGptPromptEmbeddings(): Cell<TonGptPromptEmbeddings> {
+    return TonGptPromptEmbeddings {
+        byteEmbeddings: [],
+        positionEmbeddings: [],
+        pairEmbeddings: [],
+    }.toCell();
+}
+
+fun emptyTonGptOutputWeights(): Cell<TonGptOutputWeights> {
+    return TonGptOutputWeights {
+        tokenEmbeddings: [],
+        heads: [],
+        tokenBytes: [],
+    }.toCell();
+}
+
+fun emptyTonGptModelStorage(): Cell<TonGptModelStorage> {
+    return TonGptModelStorage {
+        prompt: emptyTonGptPromptEmbeddings(),
+        output: emptyTonGptOutputWeights(),
+    }.toCell();
+}
+
+fun emptyTonGptStorage(
+    owner: address,
+    maxContext: uint8,
+    maxGenerate: uint8,
+    eosToken: uint16,
+    candidateCount: uint16,
+): TonGptStorage {
+    return TonGptStorage {
+        owner,
+        nextJobId: 1,
+        maxContext,
+        maxGenerate,
+        eosToken,
+        candidateCount,
+        model: emptyTonGptModelStorage(),
+        jobs: [],
+        isPaused: false,
+    };
+}
+
+fun mergeTonGptVectorMap8(
+    mutate target: map<uint8, TonGptVector>,
+    chunk: map<uint8, TonGptVector>,
+) {
+    var entry = chunk.findFirst();
+    while (entry.isFound) {
+        target.set(entry.getKey(), entry.loadValue());
+        entry = chunk.iterateNext(entry);
+    }
+}
+
+fun mergeTonGptVectorMap16(
+    mutate target: map<uint16, TonGptVector>,
+    chunk: map<uint16, TonGptVector>,
+) {
+    var entry = chunk.findFirst();
+    while (entry.isFound) {
+        target.set(entry.getKey(), entry.loadValue());
+        entry = chunk.iterateNext(entry);
+    }
+}
+
+fun mergeTonGptHeadMap16(
+    mutate target: map<uint16, TonGptHead>,
+    chunk: map<uint16, TonGptHead>,
+) {
+    var entry = chunk.findFirst();
+    while (entry.isFound) {
+        target.set(entry.getKey(), entry.loadValue());
+        entry = chunk.iterateNext(entry);
+    }
+}
+
+fun mergeTonGptCellMap16(mutate target: map<uint16, cell>, chunk: map<uint16, cell>) {
+    var entry = chunk.findFirst();
+    while (entry.isFound) {
+        target.set(entry.getKey(), entry.loadValue());
+        entry = chunk.iterateNext(entry);
+    }
 }
 
 fun tonGptTextComment(text: string): cell {
@@ -210,25 +312,20 @@ fun addTonGptVector(hidden: TonGptHidden, vector: TonGptVector): TonGptHidden {
 }
 
 fun tonGptHeadScore(hidden: TonGptHidden, head: TonGptHead): int32 {
-    return (
-        hidden.h0 * head.w0 +
-        hidden.h1 * head.w1 +
-        hidden.h2 * head.w2 +
-        hidden.h3 * head.w3 +
-        hidden.h4 * head.w4 +
-        hidden.h5 * head.w5 +
-        hidden.h6 * head.w6 +
-        hidden.h7 * head.w7 +
-        hidden.h8 * head.w8 +
-        hidden.h9 * head.w9 +
-        hidden.h10 * head.w10 +
-        hidden.h11 * head.w11 +
-        hidden.h12 * head.w12 +
-        hidden.h13 * head.w13 +
-        hidden.h14 * head.w14 +
-        hidden.h15 * head.w15 +
-        head.bias
-    ) as int32;
+    return (hidden.h0 * head.w0 + hidden.h1 * head.w1 + hidden.h2 * head.w2 + hidden.h3 * head.w3 +
+    hidden.h4 * head.w4 +
+    hidden.h5 * head.w5 +
+    hidden.h6 * head.w6 +
+    hidden.h7 * head.w7 +
+    hidden.h8 * head.w8 +
+    hidden.h9 * head.w9 +
+    hidden.h10 * head.w10 +
+    hidden.h11 * head.w11 +
+    hidden.h12 * head.w12 +
+    hidden.h13 * head.w13 +
+    hidden.h14 * head.w14 +
+    hidden.h15 * head.w15 +
+    head.bias) as int32;
 }
 
 fun considerTonGptCandidate(
@@ -244,7 +341,11 @@ fun considerTonGptCandidate(
 
     val score = tonGptHeadScore(hidden, headLookup.loadValue());
     if (!best.hasBest || score > best.score) {
-        return TonGptBest { tokenId, score, hasBest: true };
+        return TonGptBest {
+            tokenId,
+            score,
+            hasBest: true,
+        };
     }
 
     return best;
@@ -258,7 +359,11 @@ fun considerTonGptHead(
 ): TonGptBest {
     val score = tonGptHeadScore(hidden, head);
     if (!best.hasBest || score > best.score) {
-        return TonGptBest { tokenId, score, hasBest: true };
+        return TonGptBest {
+            tokenId,
+            score,
+            hasBest: true,
+        };
     }
 
     return best;

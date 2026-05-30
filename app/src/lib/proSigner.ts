@@ -47,6 +47,11 @@ type RpcDiagnostics = {
   boc?: CellStats;
 };
 
+const sleep = (ms: number) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
 function normalizeSeed(seed: string): string[] {
   return seed.trim().toLowerCase().split(/\s+/).filter(Boolean);
 }
@@ -282,4 +287,40 @@ export async function sendDirectWalletMessages(
     cellCount: bocStats.cells,
     walletState: walletState.state,
   };
+}
+
+export async function waitForDirectWalletSeqno(
+  client: TonClient,
+  network: Network,
+  seed: string,
+  minSeqno: number,
+): Promise<number> {
+  const { wallet } = await openSeedWallet(seed, network);
+  const walletAddress = wallet.address.toString({
+    bounceable: false,
+    testOnly: network === 'testnet',
+  });
+  const openedWallet = client.open(wallet);
+
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const walletState = await rpcStep(
+      'read wallet state',
+      () => client.getContractState(wallet.address),
+      { walletAddress },
+    );
+    if (walletState.state === 'active') {
+      const seqno = await rpcStep(
+        'read wallet seqno',
+        () => openedWallet.getSeqno(),
+        { walletAddress, walletState: walletState.state },
+      );
+      if (seqno >= minSeqno) return seqno;
+    }
+
+    await sleep(1500);
+  }
+
+  throw new Error(
+    `Direct signer seqno did not reach ${minSeqno} for ${walletAddress}`,
+  );
 }

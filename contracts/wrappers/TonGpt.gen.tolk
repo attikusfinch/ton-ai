@@ -88,6 +88,40 @@ fun TonGpt.sendContinueTonGpt(
     return net.send(from, genericMsg);
 }
 
+fun TonGpt.sendUploadTonGptPromptChunk(
+    self,
+    from: address,
+    byteEmbeddings: map<uint8, TonGptVector>,
+    positionEmbeddings: map<uint8, TonGptVector>,
+    pairEmbeddings: map<uint16, TonGptVector>,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: UploadTonGptPromptChunk { byteEmbeddings, positionEmbeddings, pairEmbeddings },
+    });
+    return net.send(from, genericMsg);
+}
+
+fun TonGpt.sendUploadTonGptOutputChunk(
+    self,
+    from: address,
+    tokenEmbeddings: map<uint16, TonGptVector>,
+    heads: map<uint16, TonGptHead>,
+    tokenBytes: map<uint16, cell>,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: UploadTonGptOutputChunk { tokenEmbeddings, heads, tokenBytes },
+    });
+    return net.send(from, genericMsg);
+}
+
 /// Send message to the contract with a custom body cell
 fun TonGpt.sendAny(self, from: address, body: cell, config: SendParams = {}): SendResultList {
     val genericMsg = createMessage({

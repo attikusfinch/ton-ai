@@ -1,6 +1,6 @@
+import "@acton/io"
 import "@acton/emulation/network"
 import "@acton/emulation/testing"
-import "@acton/io"
 import "@acton/testing/expect"
 
 import "@contracts/tongpt_types"
@@ -18,6 +18,37 @@ get fun `test tongpt deploy exposes trained model config`() {
     expect(config.eosToken).toEqual(0);
     expect(config.candidateCount).toEqual(244);
     expect(config.isPaused).toBeFalse();
+}
+
+get fun `test tongpt empty deploy accepts output weight chunks`() {
+    val deployer = testing.treasury("tongpt-empty-deployer");
+    val model = TonGpt.fromStorage(emptyTonGptStorage(deployer.address, 80, 1, 0, 2));
+    val deploy = model.deploy(deployer.address, { value: ton("0.2") });
+    expect(deploy).toHaveSuccessfulDeploy({
+        to: model.address,
+    });
+
+    expect(model.generate(tonGptTextComment("x")).hash()).toEqual(tonGptTextComment("?").hash());
+
+    var heads: map<uint16, TonGptHead> = [];
+    heads.set(0, testTonGptHead(0));
+    heads.set(1, testTonGptHead(1));
+
+    var tokenBytes: map<uint16, cell> = [];
+    tokenBytes.set(1, tonGptTextPayload("ok"));
+
+    val upload = model.sendUploadTonGptOutputChunk(
+        deployer.address,
+        [],
+        heads,
+        tokenBytes,
+        { value: ton("0.1") },
+    );
+    expect(upload).toHaveSuccessfulTx({
+        from: deployer.address,
+        to: model.address,
+    });
+    expect(model.generate(tonGptTextComment("x")).hash()).toEqual(tonGptTextComment("ok").hash());
 }
 
 get fun `test tongpt get method runs neural generation without cache`() {
@@ -186,4 +217,26 @@ fun continueTonGptSteps(
         sent += 1;
     }
     return result;
+}
+
+fun testTonGptHead(bias: int32): TonGptHead {
+    return TonGptHead {
+        w0: 0,
+        w1: 0,
+        w2: 0,
+        w3: 0,
+        w4: 0,
+        w5: 0,
+        w6: 0,
+        w7: 0,
+        w8: 0,
+        w9: 0,
+        w10: 0,
+        w11: 0,
+        w12: 0,
+        w13: 0,
+        w14: 0,
+        w15: 0,
+        bias,
+    };
 }

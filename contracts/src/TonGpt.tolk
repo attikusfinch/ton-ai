@@ -1,5 +1,4 @@
 import "tongpt_types"
-import "tongpt_weights"
 
 contract TonGpt {
     author: "Acton User"
@@ -33,9 +32,7 @@ fun encodeTonGptPrompt(body: slice, storage: TonGptStorage): TonGptHidden {
     var prompt = body;
     prompt.skipBits(32);
     assert (prompt.remainingBitsCount() >= 8) throw TonGptErrors.InvalidPrompt;
-    assert (
-        prompt.remainingBitsCount() / 8 <= storage.maxContext
-    ) throw TonGptErrors.InvalidPrompt;
+    assert (prompt.remainingBitsCount() / 8 <= storage.maxContext) throw TonGptErrors.InvalidPrompt;
 
     val model = storage.modelData();
     val promptWeights = model.promptData();
@@ -69,7 +66,11 @@ fun encodeTonGptPrompt(body: slice, storage: TonGptStorage): TonGptHidden {
     return hidden;
 }
 
-fun appendTonGptToken(mutate result: builder, tokenId: uint16, outputWeights: TonGptOutputWeights): bool {
+fun appendTonGptToken(
+    mutate result: builder,
+    tokenId: uint16,
+    outputWeights: TonGptOutputWeights,
+): bool {
     val tokenLookup = outputWeights.tokenBytes.get(tokenId);
     if (!tokenLookup.isFound) {
         return false;
@@ -136,7 +137,12 @@ fun generatedTonGptCommentFromHidden(hiddenStart: TonGptHidden, storage: TonGptS
     var shouldGenerate = true;
 
     while (generated < storage.maxGenerate && shouldGenerate) {
-        val best = tongptConsiderAllCandidates(hidden, outputWeights);
+        var best = TonGptBest {
+            tokenId: 0,
+            score: 0,
+            hasBest: false,
+        };
+        best = tongptConsiderCandidateRange(hidden, outputWeights, 0, storage.candidateCount, best);
         if (!best.hasBest || best.tokenId == storage.eosToken) {
             shouldGenerate = false;
         } else {
@@ -178,19 +184,21 @@ fun startTonGptJob(senderAddress: address, body: slice) {
     val hidden = encodeTonGptPrompt(body, storage);
     val jobId = storage.nextJobId;
     storage.nextJobId += 1;
-    storage.jobs.set(
-        jobId,
-        TonGptJob {
-            user: senderAddress,
-            hidden,
-            generated: 0,
-            replyBody: emptyTonGptReply(),
-            scanCursor: 0,
-            bestToken: 0,
-            bestScore: 0,
-            hasBest: false,
-        },
-    );
+    storage
+        .jobs
+        .set(
+            jobId,
+            TonGptJob {
+                user: senderAddress,
+                hidden,
+                generated: 0,
+                replyBody: emptyTonGptReply(),
+                scanCursor: 0,
+                bestToken: 0,
+                bestScore: 0,
+                hasBest: false,
+            },
+        );
     storage.save();
 }
 
@@ -206,7 +214,7 @@ fun continueTonGptJob(msg: ContinueTonGpt) {
     var job = lookup.loadValue();
     val model = storage.modelData();
     val outputWeights = model.outputData();
-    val candidateCount = tongptCandidateCount();
+    val candidateCount = storage.candidateCount;
     var nextCursor = (job.scanCursor + tongptCandidateChunkSize()) as uint16;
     if (nextCursor > candidateCount) {
         nextCursor = candidateCount;
@@ -270,6 +278,40 @@ fun continueTonGptJob(msg: ContinueTonGpt) {
     storage.save();
 }
 
+fun uploadTonGptPromptChunk(senderAddress: address, msg: UploadTonGptPromptChunk) {
+    var storage = lazy TonGptStorage.load();
+    assertTonGptOwner(senderAddress, storage);
+
+    val model = storage.modelData();
+    var promptWeights = model.promptData();
+    mergeTonGptVectorMap8(mutate promptWeights.byteEmbeddings, msg.byteEmbeddings);
+    mergeTonGptVectorMap8(mutate promptWeights.positionEmbeddings, msg.positionEmbeddings);
+    mergeTonGptVectorMap16(mutate promptWeights.pairEmbeddings, msg.pairEmbeddings);
+
+    storage.model = TonGptModelStorage {
+        prompt: promptWeights.toCell(),
+        output: model.output,
+    }.toCell();
+    storage.save();
+}
+
+fun uploadTonGptOutputChunk(senderAddress: address, msg: UploadTonGptOutputChunk) {
+    var storage = lazy TonGptStorage.load();
+    assertTonGptOwner(senderAddress, storage);
+
+    val model = storage.modelData();
+    var outputWeights = model.outputData();
+    mergeTonGptVectorMap16(mutate outputWeights.tokenEmbeddings, msg.tokenEmbeddings);
+    mergeTonGptHeadMap16(mutate outputWeights.heads, msg.heads);
+    mergeTonGptCellMap16(mutate outputWeights.tokenBytes, msg.tokenBytes);
+
+    storage.model = TonGptModelStorage {
+        prompt: model.prompt,
+        output: outputWeights.toCell(),
+    }.toCell();
+    storage.save();
+}
+
 fun onInternalMessage(in: InMessage) {
     if (isTonGptTextComment(in.body)) {
         startTonGptJob(in.senderAddress, in.body);
@@ -299,6 +341,12 @@ fun onInternalMessage(in: InMessage) {
         ContinueTonGpt => {
             continueTonGptJob(msg);
         }
+        UploadTonGptPromptChunk => {
+            uploadTonGptPromptChunk(in.senderAddress, msg);
+        }
+        UploadTonGptOutputChunk => {
+            uploadTonGptOutputChunk(in.senderAddress, msg);
+        }
         else => {
             assert (in.body.isEmpty()) throw TonGptErrors.InvalidMessage;
         }
@@ -315,7 +363,7 @@ get fun config(): TonGptConfig {
         maxContext: storage.maxContext,
         maxGenerate: storage.maxGenerate,
         eosToken: storage.eosToken,
-        candidateCount: tongptCandidateCount(),
+        candidateCount: storage.candidateCount,
         isPaused: storage.isPaused,
     };
 }
