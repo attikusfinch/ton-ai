@@ -104,8 +104,7 @@ const defaultKnownReplies: KnownReply[] = [
   },
   {
     prompt: 'What happens if you do not know the answer?',
-    reply:
-      'If I do not know an answer, I run a tiny on-chain recurrent model.',
+    reply: 'If I do not know an answer, I run a tiny on-chain recurrent model.',
   },
 ];
 
@@ -232,7 +231,10 @@ export function createDefaultNeuralStep(): NeuralStepValue {
   });
 }
 
-export function createDefaultNeuralHeads(): Dictionary<bigint, NeuralHeadValue> {
+export function createDefaultNeuralHeads(): Dictionary<
+  bigint,
+  NeuralHeadValue
+> {
   const heads = Dictionary.empty<bigint, NeuralHeadValue>(
     Dictionary.Keys.BigUint(16),
   );

@@ -297,7 +297,9 @@ export default function App() {
   const canWithdraw = Boolean(canSend && isOwner && withdrawAmount.trim());
   const generationValueTon =
     Number(replyValue) / 1_000_000_000 +
-    (Number(continueValue) / 1_000_000_000) * tongptMetadata.maxGenerate;
+    (Number(continueValue) / 1_000_000_000) *
+      tongptMetadata.maxGenerate *
+      tongptMetadata.continuationWindows;
 
   const saveContractInput = useCallback(
     (value: string) => {
@@ -389,10 +391,13 @@ export default function App() {
     async (sinceUnix: number): Promise<ReplyMatch | null> => {
       if (!contractAddress || !ownerAddress) return null;
 
-      const contractTransactions = await client.getTransactions(contractAddress, {
-        limit: 40,
-        archival: false,
-      });
+      const contractTransactions = await client.getTransactions(
+        contractAddress,
+        {
+          limit: 40,
+          archival: false,
+        },
+      );
 
       for (const tx of contractTransactions) {
         if (tx.now < sinceUnix - 30) continue;
@@ -509,7 +514,9 @@ export default function App() {
     try {
       const nextConfig = await openedContract.getConfig();
       setConfig(nextConfig);
-      const steps = Math.max(1, Number(nextConfig.maxGenerate));
+      const steps =
+        Math.max(1, Number(nextConfig.maxGenerate)) *
+        tongptMetadata.continuationWindows;
       const messages = buildGenerationMessages(
         contractTarget,
         text,
@@ -803,10 +810,14 @@ export default function App() {
               {[
                 ['Hidden', tongptMetadata.hidden],
                 ['Tokens', tongptMetadata.tokenCount],
+                ['Chunk', tongptMetadata.candidateChunkSize],
                 ['Context', tongptMetadata.maxContext],
                 ['Generate', tongptMetadata.maxGenerate],
               ].map(([label, value]) => (
-                <div key={label} className="rounded-md border bg-background p-3">
+                <div
+                  key={label}
+                  className="rounded-md border bg-background p-3"
+                >
                   <div className="text-muted-foreground">{label}</div>
                   <div className="mt-1 font-mono text-[15px]">{value}</div>
                 </div>
@@ -917,7 +928,9 @@ export default function App() {
               <div className="text-[13px] text-muted-foreground">
                 {canSend
                   ? `${generationValueTon.toFixed(2)} TON / ${
-                      tongptMetadata.maxGenerate + 1
+                      tongptMetadata.maxGenerate *
+                        tongptMetadata.continuationWindows +
+                      1
                     } messages`
                   : walletAddress
                     ? 'Contract required'
@@ -958,7 +971,10 @@ export default function App() {
                 ['Context', bigintText(config?.maxContext)],
                 ['Generate', bigintText(config?.maxGenerate)],
               ].map(([label, value]) => (
-                <div key={label} className="rounded-md border bg-background p-3">
+                <div
+                  key={label}
+                  className="rounded-md border bg-background p-3"
+                >
                   <div className="text-muted-foreground">{label}</div>
                   <div className="mt-1 font-mono text-[15px]">{value}</div>
                 </div>

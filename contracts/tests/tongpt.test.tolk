@@ -1,5 +1,6 @@
 import "@acton/emulation/network"
 import "@acton/emulation/testing"
+import "@acton/io"
 import "@acton/testing/expect"
 
 import "@contracts/tongpt_types"
@@ -15,7 +16,7 @@ get fun `test tongpt deploy exposes trained model config`() {
     expect(config.maxContext).toEqual(80);
     expect(config.maxGenerate).toEqual(8);
     expect(config.eosToken).toEqual(0);
-    expect(config.candidateCount).toEqual(132);
+    expect(config.candidateCount).toEqual(244);
     expect(config.isPaused).toBeFalse();
 }
 
@@ -34,6 +35,33 @@ get fun `test tongpt get method runs neural generation without cache`() {
     expect(model.generate(tonGptTextComment("What is Telegram?")).hash()).toEqual(
         tonGptTextComment("Telegram is a messenger created by Pavel Durov and connected with the TON ecosystem.").hash(),
     );
+}
+
+get fun `test tongpt chunked logits stay under transaction gas`() {
+    val (model, _, user) = setupTonGptTest();
+
+    val prompt = tonGptTextComment("Hello, how are you?");
+    val start = model.sendAny(user.address, prompt, { value: ton("0.2") });
+    expect(start).toHaveSuccessfulTx({
+        from: user.address,
+        to: model.address,
+        body: prompt,
+    });
+
+    val firstChunk = model.sendContinueTonGpt(user.address, 1, { value: ton("0.08") });
+    expect(firstChunk).toHaveSuccessfulTx({
+        from: user.address,
+        to: model.address,
+    });
+
+    val secondChunk = model.sendContinueTonGpt(user.address, 1, { value: ton("0.08") });
+    expect(secondChunk).toHaveSuccessfulTx({
+        from: user.address,
+        to: model.address,
+    });
+
+    println("TONGPT 244 candidate first chunk gas={}", firstChunk.at(0).gasUsed);
+    println("TONGPT 244 candidate token chunk gas={}", secondChunk.at(0).gasUsed);
 }
 
 get fun `test tongpt answers comments through trained weights`() {
@@ -65,6 +93,20 @@ get fun `test tongpt answers comments through trained weights`() {
         from: model.address,
         to: user.address,
         body: tonGptTextComment("TON, The Open Network, is a fast blockchain for payments, apps, and smart contracts."),
+    });
+
+    val tonConnectPrompt = tonGptTextComment("What is TON Connect?");
+    val startTonConnect = model.sendAny(user.address, tonConnectPrompt, { value: ton("0.2") });
+    expect(startTonConnect).toHaveSuccessfulTx({
+        from: user.address,
+        to: model.address,
+        body: tonConnectPrompt,
+    });
+    val tonConnectRes = continueTonGptSteps(model, user, 3, 6);
+    expect(tonConnectRes).toHaveSuccessfulTx({
+        from: model.address,
+        to: user.address,
+        body: tonGptTextComment("TON Connect lets apps request wallet actions without seeing private keys."),
     });
 }
 
@@ -135,10 +177,11 @@ fun continueTonGptSteps(
     jobId: uint32,
     steps: int,
 ): SendResultList {
+    val totalSteps = steps * 2;
     var sent = 0;
     var result = model.sendContinueTonGpt(user.address, jobId, { value: ton("0.08") });
     sent += 1;
-    while (sent < steps) {
+    while (sent < totalSteps) {
         result = model.sendContinueTonGpt(user.address, jobId, { value: ton("0.08") });
         sent += 1;
     }

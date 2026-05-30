@@ -185,6 +185,10 @@ fun startTonGptJob(senderAddress: address, body: slice) {
             hidden,
             generated: 0,
             replyBody: emptyTonGptReply(),
+            scanCursor: 0,
+            bestToken: 0,
+            bestScore: 0,
+            hasBest: false,
         },
     );
     storage.save();
@@ -202,7 +206,34 @@ fun continueTonGptJob(msg: ContinueTonGpt) {
     var job = lookup.loadValue();
     val model = storage.modelData();
     val outputWeights = model.outputData();
-    val best = tongptConsiderAllCandidates(job.hidden, outputWeights);
+    val candidateCount = tongptCandidateCount();
+    var nextCursor = (job.scanCursor + tongptCandidateChunkSize()) as uint16;
+    if (nextCursor > candidateCount) {
+        nextCursor = candidateCount;
+    }
+
+    var best = TonGptBest {
+        tokenId: job.bestToken,
+        score: job.bestScore,
+        hasBest: job.hasBest,
+    };
+    best = tongptConsiderCandidateRange(
+        job.hidden,
+        outputWeights,
+        job.scanCursor,
+        nextCursor,
+        best,
+    );
+
+    if (nextCursor < candidateCount) {
+        job.scanCursor = nextCursor;
+        job.bestToken = best.tokenId;
+        job.bestScore = best.score;
+        job.hasBest = best.hasBest;
+        storage.jobs.set(msg.jobId, job);
+        storage.save();
+        return;
+    }
 
     if (!best.hasBest || best.tokenId == storage.eosToken) {
         storage.jobs.delete(msg.jobId);
@@ -231,6 +262,10 @@ fun continueTonGptJob(msg: ContinueTonGpt) {
     }
 
     job.hidden = nextHidden!;
+    job.scanCursor = 0;
+    job.bestToken = 0;
+    job.bestScore = 0;
+    job.hasBest = false;
     storage.jobs.set(msg.jobId, job);
     storage.save();
 }

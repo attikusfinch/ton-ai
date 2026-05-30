@@ -34,6 +34,7 @@ type TongptModel = {
 };
 
 const tongptModel = model as TongptModel;
+const candidateChunkSize = 128;
 
 export const replyValue = toNano('0.2').toString();
 export const continueValue = toNano('0.08').toString();
@@ -56,6 +57,8 @@ export const tongptMetadata = {
   tokenCount: tongptModel.token_count,
   maxContext: tongptModel.max_context,
   maxGenerate: tongptModel.max_generate,
+  candidateChunkSize,
+  continuationWindows: Math.ceil(tongptModel.token_count / candidateChunkSize),
 };
 
 export function textPayloadCell(text: string): Cell {

@@ -5,9 +5,11 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
+const base = process.env.GITHUB_PAGES === 'true' ? '/ton-ai/' : '/';
 
 export default defineConfig({
   root: 'app',
+  base,
   envDir: projectRoot,
   envPrefix: ['VITE_', 'TONCENTER_'],
   plugins: [react(), tailwindcss()],

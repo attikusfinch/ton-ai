@@ -93,6 +93,10 @@ struct TonGptJob {
     hidden: TonGptHidden
     generated: uint8
     replyBody: cell
+    scanCursor: uint16
+    bestToken: uint16
+    bestScore: int32
+    hasBest: bool
 }
 
 struct TonGptStorage {
@@ -258,4 +262,24 @@ fun considerTonGptHead(
     }
 
     return best;
+}
+
+fun tongptCandidateChunkSize(): uint16 {
+    return 128;
+}
+
+fun tongptConsiderCandidateRange(
+    hidden: TonGptHidden,
+    output: TonGptOutputWeights,
+    start: uint16,
+    stop: uint16,
+    best: TonGptBest,
+): TonGptBest {
+    var tokenId = start;
+    var result = best;
+    while (tokenId < stop) {
+        result = considerTonGptCandidate(tokenId, hidden, output, result);
+        tokenId += 1;
+    }
+    return result;
 }
