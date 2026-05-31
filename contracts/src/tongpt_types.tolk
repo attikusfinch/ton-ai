@@ -109,6 +109,7 @@ struct TonGptStorage {
     model: Cell<TonGptModelStorage>
     jobs: map<uint32, TonGptJob>
     isPaused: bool
+    deploySeed: uint32
 }
 
 struct TonGptConfig {
@@ -213,6 +214,24 @@ fun emptyTonGptStorage(
     eosToken: uint16,
     candidateCount: uint16,
 ): TonGptStorage {
+    return emptyTonGptStorageWithDeploySeed(
+        owner,
+        maxContext,
+        maxGenerate,
+        eosToken,
+        candidateCount,
+        0,
+    );
+}
+
+fun emptyTonGptStorageWithDeploySeed(
+    owner: address,
+    maxContext: uint8,
+    maxGenerate: uint8,
+    eosToken: uint16,
+    candidateCount: uint16,
+    deploySeed: uint32,
+): TonGptStorage {
     return TonGptStorage {
         owner,
         nextJobId: 1,
@@ -223,6 +242,7 @@ fun emptyTonGptStorage(
         model: emptyTonGptModelStorage(),
         jobs: [],
         isPaused: false,
+        deploySeed,
     };
 }
 

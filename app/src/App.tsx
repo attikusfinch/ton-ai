@@ -61,6 +61,7 @@ import {
   continueValue,
   createTonGptForOwner,
   createTonGptUploadChunks,
+  deploySeedFromText,
   defaultPrompts,
   deployValue,
   parseTextComment,
@@ -248,6 +249,7 @@ export default function App() {
   );
   const [proMode, setProMode] = useState(false);
   const [proSeed, setProSeed] = useState('');
+  const [deploySeedInput, setDeploySeedInput] = useState('');
   const [proSignerAddress, setProSignerAddress] = useState('');
   const [isCheckingProSigner, setIsCheckingProSigner] = useState(false);
   const [prompt, setPrompt] = useState('Hello, how are you?');
@@ -376,9 +378,15 @@ export default function App() {
 
   const ownerAddress = proMode ? proOwnerAddress : connectedOwnerAddress;
 
+  const deploySeed = useMemo(
+    () => deploySeedFromText(deploySeedInput),
+    [deploySeedInput],
+  );
+
   const derivedContract = useMemo(
-    () => (ownerAddress ? createTonGptForOwner(ownerAddress) : null),
-    [ownerAddress],
+    () =>
+      ownerAddress ? createTonGptForOwner(ownerAddress, deploySeed) : null,
+    [deploySeed, ownerAddress],
   );
 
   const derivedAddress = derivedContract
@@ -636,7 +644,10 @@ export default function App() {
       setStatus({ kind: 'pending', text: 'Preparing direct signer' });
       try {
         const signerAddress = await ensureProSignerAddress();
-        contractToDeploy = createTonGptForOwner(Address.parse(signerAddress));
+        contractToDeploy = createTonGptForOwner(
+          Address.parse(signerAddress),
+          deploySeed,
+        );
       } catch (error) {
         setStatus({ kind: 'error', text: formatError(error) });
         return;
@@ -673,6 +684,12 @@ export default function App() {
     } catch (error) {
       setStatus({ kind: 'error', text: formatError(error) });
     }
+  };
+
+  const randomDeploySeed = () => {
+    const bytes = new Uint32Array(1);
+    crypto.getRandomValues(bytes);
+    setDeploySeedInput(bytes[0].toString());
   };
 
   const sendPrompt = async (event?: FormEvent) => {
@@ -989,6 +1006,33 @@ export default function App() {
                   >
                     <Copy />
                   </Button>
+                </div>
+              </Field>
+
+              <Field label="Deploy seed">
+                <div className="flex gap-2">
+                  <input
+                    className={cn(inputClass, 'min-w-0 flex-1 font-mono')}
+                    value={deploySeedInput}
+                    onChange={(event) => setDeploySeedInput(event.target.value)}
+                    placeholder="optional salt"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="icon"
+                    title="Random deploy seed"
+                    onClick={randomDeploySeed}
+                  >
+                    <RefreshCw />
+                  </Button>
+                </div>
+                <div className="font-mono text-[12px] text-muted-foreground">
+                  id {deploySeed.toString()}
                 </div>
               </Field>
 

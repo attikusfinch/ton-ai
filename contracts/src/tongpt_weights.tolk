@@ -1413,6 +1413,10 @@ fun defaultTonGptModelStorage(): Cell<TonGptModelStorage> {
 }
 
 fun defaultTonGptStorage(owner: address): TonGptStorage {
+    return defaultTonGptStorageWithDeploySeed(owner, 0);
+}
+
+fun defaultTonGptStorageWithDeploySeed(owner: address, deploySeed: uint32): TonGptStorage {
     return TonGptStorage {
         owner,
         nextJobId: 1,
@@ -1423,6 +1427,7 @@ fun defaultTonGptStorage(owner: address): TonGptStorage {
         model: defaultTonGptModelStorage(),
         jobs: [],
         isPaused: false,
+        deploySeed,
     };
 }
 

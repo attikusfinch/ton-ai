@@ -270,7 +270,22 @@ export function createDefaultTokenBytes(): Dictionary<bigint, Cell> {
   return tokens;
 }
 
-export function createTonGptForOwner(owner: Address): TonGpt {
+export function deploySeedFromText(value: string): bigint {
+  const normalized = value.trim();
+  if (!normalized) return 0n;
+  if (/^\d+$/.test(normalized)) {
+    return BigInt(normalized) & 0xffffffffn;
+  }
+
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(normalized)) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return BigInt(hash);
+}
+
+export function createTonGptForOwner(owner: Address, deploySeed = 0n): TonGpt {
   return TonGpt.fromStorage({
     owner,
     nextJobId: 1n,
@@ -298,6 +313,7 @@ export function createTonGptForOwner(owner: Address): TonGpt {
     },
     jobs: Dictionary.empty<bigint, TonGptJobValue>(Dictionary.Keys.BigUint(32)),
     isPaused: false,
+    deploySeed,
   });
 }
 

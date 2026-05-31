@@ -61,6 +61,32 @@ get fun `test tongpt empty deploy accepts output weight chunks`() {
     expect(model.generate(tonGptTextComment("x")).hash()).toEqual(tonGptTextComment("ok").hash());
 }
 
+get fun `test tongpt deploy seed changes contract address`() {
+    val deployer = testing.treasury("tongpt-seeded-deployer");
+    val seedZero = TonGpt.fromStorage(
+        emptyTonGptStorageWithDeploySeed(
+            deployer.address,
+            80,
+            1,
+            0,
+            2,
+            0,
+        ),
+    );
+    val seedOne = TonGpt.fromStorage(
+        emptyTonGptStorageWithDeploySeed(
+            deployer.address,
+            80,
+            1,
+            0,
+            2,
+            1,
+        ),
+    );
+
+    expect(seedZero.address == seedOne.address).toBeFalse();
+}
+
 get fun `test tongpt get method runs neural generation without cache`() {
     val (model, _, _) = setupTonGptTest();
 
